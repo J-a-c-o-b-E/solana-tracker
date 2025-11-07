@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  solana-gem-bot:
+    build: .
+    container_name: solana-gem-bot
+    restart: unless-stopped
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
