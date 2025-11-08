@@ -74,49 +74,49 @@ class TokenFilter:
 
 
 async def fetch_solana_tokens(session, limit=50):
-    """Fetch latest Solana tokens from Dexscreener"""
+    """Fetch latest Solana tokens from Dexscreener using multiple endpoints"""
+    all_pairs = []
+    
     try:
-        # Use the token boosts endpoint which shows trending/active Solana pairs
-        url = "https://api.dexscreener.com/token-boosts/latest/v1"
-        async with session.get(url) as response:
-            if response.status == 200:
-                data = await response.json()
-                # Filter for Solana chain only
-                all_boosts = data if isinstance(data, list) else []
-                solana_pairs = []
+        # Method 1: Get tokens by searching for popular Solana DEXes
+        dexes = ['raydium', 'orca', 'meteora']
+        
+        for dex in dexes:
+            try:
+                url = f"https://api.dexscreener.com/latest/dex/search?q={dex}"
+                async with session.get(url) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        pairs = data.get('pairs', [])
+                        # Filter for Solana chain
+                        for pair in pairs:
+                            if pair.get('chainId') == 'solana' and pair.get('liquidity', {}).get('usd', 0) > 0:
+                                all_pairs.append(pair)
+                await asyncio.sleep(0.5)  # Rate limiting
+            except Exception as e:
+                print(f"Error fetching from {dex}: {e}")
                 
-                # Get Solana pairs from boosts
-                for boost in all_boosts:
-                    if boost.get('chainId') == 'solana':
-                        solana_pairs.append(boost)
-                
-                # If we don't have enough, also try the profiles endpoint
-                if len(solana_pairs) < 10:
-                    url2 = "https://api.dexscreener.com/latest/dex/search?q=SOL"
-                    async with session.get(url2) as response2:
-                        if response2.status == 200:
-                            data2 = await response2.json()
-                            pairs2 = data2.get('pairs', [])
-                            for pair in pairs2:
-                                if pair.get('chainId') == 'solana' and pair.get('dexId') != 'solana':
-                                    solana_pairs.append(pair)
-                
-                print(f"📊 Total pairs fetched: {len(solana_pairs)}")
-                
-                # Debug: Print first pair details if available
-                if solana_pairs:
-                    first = solana_pairs[0]
-                    print(f"📝 Sample token: {first.get('baseToken', {}).get('symbol')} - "
-                          f"Liq: ${first.get('liquidity', {}).get('usd', 0):,.0f}, "
-                          f"FDV: ${first.get('fdv', 0):,.0f}")
-                else:
-                    print("⚠️ No Solana pairs found")
-                
-                return solana_pairs[:limit]
-            else:
-                print(f"❌ API returned status: {response.status}")
+        print(f"📊 Total pairs fetched: {len(all_pairs)}")
+        
+        if all_pairs:
+            # Sort by liquidity to get most active
+            all_pairs.sort(key=lambda x: float(x.get('liquidity', {}).get('usd', 0)), reverse=True)
+            
+            first = all_pairs[0]
+            print(f"📝 Sample token: {first.get('baseToken', {}).get('symbol')} - "
+                  f"Liq: ${first.get('liquidity', {}).get('usd', 0):,.0f}, "
+                  f"FDV: ${first.get('fdv', 0):,.0f}, "
+                  f"DEX: {first.get('dexId')}")
+        else:
+            print("⚠️ No Solana pairs found")
+        
+        return all_pairs[:limit]
+        
     except Exception as e:
         print(f"❌ Error fetching tokens: {e}")
+        import traceback
+        traceback.print_exc()
+    
     return []
 
 
