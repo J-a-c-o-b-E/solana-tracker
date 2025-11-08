@@ -14,61 +14,61 @@ class TokenFilter:
     
     VERY_DEGEN = {
         'name': 'Very Degen',
-        'min_liquidity': 10000,
+        'min_liquidity': 5000,  # Lowered from 10k
         'max_liquidity': float('inf'),
-        'min_fdv': 100000,
+        'min_fdv': 50000,  # Lowered from 100k
         'max_fdv': float('inf'),
         'min_pair_age_hours': 0,
         'max_pair_age_hours': 48,
-        'min_txns_1h': 30,
+        'min_txns_1h': 10,  # Lowered from 30
         'max_txns_1h': float('inf'),
     }
     
     DEGEN = {
         'name': 'Degen',
-        'min_liquidity': 15000,
+        'min_liquidity': 8000,  # Lowered from 15k
         'max_liquidity': float('inf'),
-        'min_fdv': 100000,
+        'min_fdv': 50000,  # Lowered from 100k
         'max_fdv': float('inf'),
         'min_pair_age_hours': 1,
         'max_pair_age_hours': 72,
-        'min_txns_1h': 100,
+        'min_txns_1h': 20,  # Lowered from 100
         'max_txns_1h': float('inf'),
     }
     
     MID_CAPS = {
         'name': 'Mid-Caps',
-        'min_liquidity': 100000,
+        'min_liquidity': 50000,  # Lowered from 100k
         'max_liquidity': float('inf'),
-        'min_fdv': 1000000,
+        'min_fdv': 500000,  # Lowered from 1M
         'max_fdv': float('inf'),
-        'min_volume_24h': 1200000,
+        'min_volume_24h': 100000,  # Lowered from 1.2M
         'max_volume_24h': float('inf'),
-        'min_txns_24h': 30,
+        'min_txns_24h': 20,  # Lowered from 30
         'max_txns_24h': float('inf'),
     }
     
     OLD_MID_CAPS = {
         'name': 'Old Mid-Caps',
-        'min_liquidity': 100000,
+        'min_liquidity': 50000,  # Lowered from 100k
         'max_liquidity': float('inf'),
-        'min_fdv': 200000,
+        'min_fdv': 100000,  # Lowered from 200k
         'max_fdv': 100000000,
         'min_pair_age_hours': 720,
         'max_pair_age_hours': 2800,
-        'min_volume_24h': 200000,
+        'min_volume_24h': 50000,  # Lowered from 200k
         'max_volume_24h': float('inf'),
-        'min_txns_24h': 2000,
+        'min_txns_24h': 100,  # Lowered from 2000
         'max_txns_24h': float('inf'),
     }
     
     LARGER_MID_CAPS = {
         'name': 'Larger Mid-Caps',
-        'min_liquidity': 200000,
+        'min_liquidity': 100000,  # Lowered from 200k
         'max_liquidity': float('inf'),
-        'min_mcap': 1000000,
+        'min_mcap': 500000,  # Lowered from 1M
         'max_mcap': float('inf'),
-        'min_volume_6h': 150000,
+        'min_volume_6h': 50000,  # Lowered from 150k
         'max_volume_6h': float('inf'),
     }
 
