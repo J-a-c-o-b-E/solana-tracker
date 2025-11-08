@@ -73,13 +73,14 @@ class TokenFilter:
     }
 
 
-async def fetch_solana_tokens(session, limit=50):
+async def fetch_solana_tokens(session, limit=500):
     """Fetch latest Solana tokens from Dexscreener using multiple endpoints"""
     all_pairs = []
+    seen_addresses = set()  # Avoid duplicates
     
     try:
         # Method 1: Get tokens by searching for popular Solana DEXes
-        dexes = ['raydium', 'orca', 'meteora']
+        dexes = ['raydium', 'orca', 'meteora', 'pump.fun', 'jupiter', 'lifinity']
         
         for dex in dexes:
             try:
@@ -88,15 +89,39 @@ async def fetch_solana_tokens(session, limit=50):
                     if response.status == 200:
                         data = await response.json()
                         pairs = data.get('pairs', [])
-                        # Filter for Solana chain
+                        # Filter for Solana chain and avoid duplicates
                         for pair in pairs:
-                            if pair.get('chainId') == 'solana' and pair.get('liquidity', {}).get('usd', 0) > 0:
+                            pair_address = pair.get('pairAddress')
+                            if (pair.get('chainId') == 'solana' and 
+                                pair.get('liquidity', {}).get('usd', 0) > 0 and
+                                pair_address not in seen_addresses):
                                 all_pairs.append(pair)
-                await asyncio.sleep(0.5)  # Rate limiting
+                                seen_addresses.add(pair_address)
+                await asyncio.sleep(0.3)  # Rate limiting
             except Exception as e:
                 print(f"Error fetching from {dex}: {e}")
+        
+        # Method 2: Also fetch by popular quote tokens
+        quote_tokens = ['SOL', 'USDC', 'USDT']
+        for quote in quote_tokens:
+            try:
+                url = f"https://api.dexscreener.com/latest/dex/search?q={quote}"
+                async with session.get(url) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        pairs = data.get('pairs', [])
+                        for pair in pairs:
+                            pair_address = pair.get('pairAddress')
+                            if (pair.get('chainId') == 'solana' and 
+                                pair.get('liquidity', {}).get('usd', 0) > 0 and
+                                pair_address not in seen_addresses):
+                                all_pairs.append(pair)
+                                seen_addresses.add(pair_address)
+                await asyncio.sleep(0.3)
+            except Exception as e:
+                print(f"Error fetching for {quote}: {e}")
                 
-        print(f"📊 Total pairs fetched: {len(all_pairs)}")
+        print(f"📊 Total unique pairs fetched: {len(all_pairs)}")
         
         if all_pairs:
             # Sort by liquidity to get most active
@@ -302,7 +327,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Fetch and filter tokens
     async with aiohttp.ClientSession() as session:
-        pairs = await fetch_solana_tokens(session, limit=100)
+        pairs = await fetch_solana_tokens(session, limit=500)
         
         print(f"🔍 Checking {len(pairs)} pairs against {filter_config['name']} filter")
         
@@ -366,7 +391,7 @@ async def auto_scan(context: ContextTypes.DEFAULT_TYPE):
         
         # Scan with Very Degen filter (most aggressive for new gems)
         async with aiohttp.ClientSession() as session:
-            pairs = await fetch_solana_tokens(session, limit=100)
+            pairs = await fetch_solana_tokens(session, limit=500)
             
             matching_pairs = []
             for pair in pairs:
