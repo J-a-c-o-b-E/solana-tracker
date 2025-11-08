@@ -318,14 +318,15 @@ def format_token_message(pair):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start command handler"""
+    from telegram import ReplyKeyboardMarkup, KeyboardButton
+    
+    # Create persistent keyboard with 5 buttons at the bottom
     keyboard = [
-        [InlineKeyboardButton("Very Degen 🔥", callback_data='very_degen')],
-        [InlineKeyboardButton("Degen 💎", callback_data='degen')],
-        [InlineKeyboardButton("Mid-Caps 📈", callback_data='mid_caps')],
-        [InlineKeyboardButton("Old Mid-Caps 🏛️", callback_data='old_mid_caps')],
-        [InlineKeyboardButton("Larger Mid-Caps 💰", callback_data='larger_mid_caps')],
+        [KeyboardButton("Very Degen 🔥"), KeyboardButton("Degen 💎")],
+        [KeyboardButton("Mid-Caps 📈"), KeyboardButton("Old Mid-Caps 🏛️")],
+        [KeyboardButton("Larger Mid-Caps 💰")],
     ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, persistent=True)
     
     await update.message.reply_text(
         "Select a filter:",
@@ -490,20 +491,160 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle any text message - just show the buttons again"""
-    keyboard = [
-        [InlineKeyboardButton("Very Degen 🔥", callback_data='very_degen')],
-        [InlineKeyboardButton("Degen 💎", callback_data='degen')],
-        [InlineKeyboardButton("Mid-Caps 📈", callback_data='mid_caps')],
-        [InlineKeyboardButton("Old Mid-Caps 🏛️", callback_data='old_mid_caps')],
-        [InlineKeyboardButton("Larger Mid-Caps 💰", callback_data='larger_mid_caps')],
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
+    """Handle text messages from keyboard buttons"""
+    text = update.message.text
+    
+    # Map button text to filter
+    filter_map = {
+        'Very Degen 🔥': TokenFilter.VERY_DEGEN,
+        'Degen 💎': TokenFilter.DEGEN,
+        'Mid-Caps 📈': TokenFilter.MID_CAPS,
+        'Old Mid-Caps 🏛️': TokenFilter.OLD_MID_CAPS,
+        'Larger Mid-Caps 💰': TokenFilter.LARGER_MID_CAPS,
+    }
+    
+    filter_config = filter_map.get(text)
+    
+    if not filter_config:
+        # Unknown text - ignore
+        return
     
     await update.message.reply_text(
-        "Select a filter:",
-        reply_markup=reply_markup
+        f"🔍 Searching for **{filter_config['name']}** tokens...\n"
+        "This may take a few moments.",
+        parse_mode='Markdown'
     )
+    
+    # Get or initialize shown tokens set for this user
+    user_id = update.effective_user.id
+    if 'shown_tokens' not in context.user_data:
+        context.user_data['shown_tokens'] = set()
+    
+    shown_tokens = context.user_data['shown_tokens']
+    
+    # Fetch and filter tokens
+    async with aiohttp.ClientSession() as session:
+        pairs = await fetch_solana_tokens(session, limit=2000)
+        
+        print(f"🔍 Checking {len(pairs)} pairs against {filter_config['name']} filter")
+        
+        # First try to find perfect matches (excluding already shown)
+        perfect_matches = []
+        checked_count = 0
+        
+        for pair in pairs:
+            pair_address = pair.get('pairAddress')
+            # Skip if already shown to this user
+            if pair_address in shown_tokens:
+                continue
+                
+            checked_count += 1
+            if matches_filter(pair, filter_config):
+                perfect_matches.append(pair)
+                print(f"✅ Perfect match found: {pair.get('baseToken', {}).get('symbol')}")
+                break  # Stop after finding 1 perfect match
+        
+        print(f"📊 Checked {checked_count} pairs, found {len(perfect_matches)} perfect matches")
+        
+        # If no perfect match, find the BEST token that's closest to criteria
+        if not perfect_matches:
+            print("⚠️ No perfect match, finding best alternative...")
+            
+            # Score all tokens and pick the best one (excluding already shown)
+            scored_pairs = []
+            for pair in pairs:
+                pair_address = pair.get('pairAddress')
+                # Skip if already shown to this user
+                if pair_address in shown_tokens:
+                    continue
+                    
+                score = 0
+                liquidity = float(pair.get('liquidity', {}).get('usd', 0))
+                fdv = float(pair.get('fdv', 0))
+                
+                # Skip tokens with no data
+                if liquidity < 1000:
+                    continue
+                
+                # Score based on how close to target liquidity range
+                target_liq_min = filter_config.get('min_liquidity', 0)
+                target_liq_max = filter_config.get('max_liquidity', float('inf'))
+                
+                if target_liq_min <= liquidity <= target_liq_max:
+                    score += 100  # Perfect liquidity range
+                else:
+                    # Calculate distance from range
+                    if liquidity < target_liq_min:
+                        diff_pct = abs(liquidity - target_liq_min) / target_liq_min
+                    else:
+                        diff_pct = abs(liquidity - target_liq_max) / target_liq_max
+                    score += max(0, 50 - diff_pct * 50)
+                
+                # Score FDV if applicable
+                if 'min_fdv' in filter_config:
+                    target_fdv_min = filter_config.get('min_fdv', 0)
+                    target_fdv_max = filter_config.get('max_fdv', float('inf'))
+                    if target_fdv_min <= fdv <= target_fdv_max:
+                        score += 50
+                
+                # Score age if applicable
+                if 'min_pair_age_hours' in filter_config:
+                    pair_created = pair.get('pairCreatedAt')
+                    if pair_created:
+                        age_hours = calculate_pair_age_hours(pair_created)
+                        if age_hours:
+                            target_age_min = filter_config.get('min_pair_age_hours', 0)
+                            target_age_max = filter_config.get('max_pair_age_hours', float('inf'))
+                            if target_age_min <= age_hours <= target_age_max:
+                                score += 50
+                
+                # Score transactions if applicable
+                if 'min_txns_1h' in filter_config:
+                    txns_1h = pair.get('txns', {}).get('h1', {})
+                    txns_total = txns_1h.get('buys', 0) + txns_1h.get('sells', 0)
+                    target_min = filter_config.get('min_txns_1h', 0)
+                    if txns_total >= target_min:
+                        score += 30
+                
+                if score > 0:
+                    scored_pairs.append((score, pair))
+            
+            # Sort by score and pick the best
+            scored_pairs.sort(reverse=True, key=lambda x: x[0])
+            
+            if scored_pairs:
+                best_score, best_pair = scored_pairs[0]
+                perfect_matches = [best_pair]
+                print(f"✅ Best alternative found (score: {best_score:.0f}): {best_pair.get('baseToken', {}).get('symbol')}")
+            else:
+                # Last resort: just pick the first token with good liquidity (not already shown)
+                for pair in pairs:
+                    pair_address = pair.get('pairAddress')
+                    if pair_address not in shown_tokens and float(pair.get('liquidity', {}).get('usd', 0)) > 5000:
+                        perfect_matches = [pair]
+                        print(f"✅ Fallback token: {pair.get('baseToken', {}).get('symbol')}")
+                        break
+        
+        # Send the token (we WILL have one at this point)
+        if perfect_matches:
+            pair = perfect_matches[0]
+            pair_address = pair.get('pairAddress')
+            
+            # Mark this token as shown to this user
+            shown_tokens.add(pair_address)
+            
+            # Keep only last 50 shown tokens to avoid memory issues
+            if len(shown_tokens) > 50:
+                shown_tokens.pop()
+            
+            message = format_token_message(pair)
+            await update.message.reply_text(message, parse_mode='Markdown', disable_web_page_preview=True)
+        else:
+            # This should never happen now, but just in case
+            await update.message.reply_text(
+                f"❌ Unable to find any tokens. Please try again in a moment.",
+                parse_mode='Markdown'
+            )
 
 
 async def scan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
