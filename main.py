@@ -298,6 +298,71 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
 
+async def scan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Manual scan command for groups"""
+    keyboard = [
+        [
+            InlineKeyboardButton("Very Degen 🔥", callback_data='very_degen'),
+            InlineKeyboardButton("Degen 💎", callback_data='degen'),
+        ],
+        [
+            InlineKeyboardButton("Mid-Caps 📈", callback_data='mid_caps'),
+            InlineKeyboardButton("Old Mid-Caps 🏛️", callback_data='old_mid_caps'),
+        ],
+        [
+            InlineKeyboardButton("Larger Mid-Caps 💰", callback_data='larger_mid_caps'),
+        ],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(
+        "🔍 **Select a filter to scan Solana tokens:**",
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+
+
+async def auto_scan(context: ContextTypes.DEFAULT_TYPE):
+    """Automatic scan job that runs periodically"""
+    try:
+        # Get the group chat ID from environment or use default
+        group_chat_id = os.environ.get('TELEGRAM_GROUP_ID', '3229530404')
+        
+        # Convert to negative ID for groups (Telegram API requirement)
+        if not group_chat_id.startswith('-'):
+            group_chat_id = f'-{group_chat_id}'
+        
+        # Scan with Very Degen filter (most aggressive for new gems)
+        async with aiohttp.ClientSession() as session:
+            pairs = await fetch_solana_tokens(session, limit=100)
+            
+            matching_pairs = []
+            for pair in pairs:
+                if matches_filter(pair, TokenFilter.VERY_DEGEN):
+                    matching_pairs.append(pair)
+                    if len(matching_pairs) >= 5:  # Limit to top 5 gems
+                        break
+            
+            if matching_pairs:
+                await context.bot.send_message(
+                    chat_id=group_chat_id,
+                    text=f"🔥 **Auto Scan Alert!**\n\nFound {len(matching_pairs)} Very Degen tokens:",
+                    parse_mode='Markdown'
+                )
+                
+                for pair in matching_pairs:
+                    message = format_token_message(pair)
+                    await context.bot.send_message(
+                        chat_id=group_chat_id,
+                        text=message,
+                        parse_mode='Markdown',
+                        disable_web_page_preview=True
+                    )
+                    await asyncio.sleep(1)
+    except Exception as e:
+        print(f"Error in auto_scan: {e}")
+
+
 def main():
     """Main function to run the bot"""
     # Get bot token from environment variable
@@ -309,15 +374,28 @@ def main():
         print("  export TELEGRAM_BOT_TOKEN='your_token_here'")
         return
     
+    print(f"🤖 Bot Token: {bot_token[:10]}...{bot_token[-5:]}")
+    
+    # Get group ID
+    group_id = os.environ.get('TELEGRAM_GROUP_ID', '3229530404')
+    print(f"📢 Group ID: {group_id}")
+    
     # Create application
     application = Application.builder().token(bot_token).build()
     
     # Add handlers
     application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("scan", scan_command))
     application.add_handler(CallbackQueryHandler(button_callback))
+    
+    # Add auto-scan job (runs every 30 minutes)
+    job_queue = application.job_queue
+    job_queue.run_repeating(auto_scan, interval=1800, first=10)  # 1800 seconds = 30 minutes
     
     # Start the bot
     print("🤖 Bot is starting...")
+    print("🔄 Auto-scan enabled: Every 30 minutes")
+    print("💎 Ready to find Solana gems!")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
