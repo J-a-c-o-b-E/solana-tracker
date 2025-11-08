@@ -296,14 +296,14 @@ def format_token_message(pair, filter_name=None):
         
         # Category header based on filter
         category_headers = {
-            'Very Degen': '🔥VERY DEGEN🔥',
-            'Degen': '💎DEGEN💎',
-            'Mid-Caps': '📈MID-CAPS📈',
-            'Old Mid-Caps': '🏦OLD MID-CAPS🏦',
-            'Larger Mid-Caps': '💰LARGER MID-CAPS💰',
+            'Very Degen': '**🔥VERY DEGEN🔥**',
+            'Degen': '**💎DEGEN💎**',
+            'Mid-Caps': '**📈MID-CAPS📈**',
+            'Old Mid-Caps': '**🏦OLD MID-CAPS🏦**',
+            'Larger Mid-Caps': '**💰LARGER MID-CAPS💰**',
         }
         
-        header = category_headers.get(filter_name, '🔍TOKEN')
+        header = category_headers.get(filter_name, '**🔍TOKEN**')
         
         message = f"{header}\n\n"
         message += f"🪙 {name} (${symbol})\n\n"
@@ -346,7 +346,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     
     welcome_message = (
-        "Welcome to the Memecoin Method Tracker_ 🔍\n\n"
+        "Welcome to the Memecoin Method Tracker 🔍\n\n"
         "Find hidden gems on Solana based on our proven filters. "
         "Select your desired token type below:\n\n"
         "🔥 Very Degen → 0-48h old, $10K-$15K liquidity\n"
