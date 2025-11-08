@@ -15,31 +15,31 @@ class TokenFilter:
     VERY_DEGEN = {
         'name': 'Very Degen',
         'min_liquidity': 10000,
-        'max_liquidity': float('inf'),
+        'max_liquidity': 14900,
         'min_fdv': 100000,
-        'max_fdv': float('inf'),
+        'max_fdv': 1000000,
         'min_pair_age_hours': 0,
         'max_pair_age_hours': 48,
         'min_txns_1h': 30,
-        'max_txns_1h': float('inf'),
+        'max_txns_1h': 99,
     }
     
     DEGEN = {
         'name': 'Degen',
         'min_liquidity': 15000,
-        'max_liquidity': float('inf'),
+        'max_liquidity': 99900,
         'min_fdv': 100000,
-        'max_fdv': float('inf'),
+        'max_fdv': 1000000,
         'min_pair_age_hours': 1,
         'max_pair_age_hours': 72,
         'min_txns_1h': 100,
-        'max_txns_1h': float('inf'),
+        'max_txns_1h': 1000,
     }
     
     MID_CAPS = {
         'name': 'Mid-Caps',
         'min_liquidity': 100000,
-        'max_liquidity': float('inf'),
+        'max_liquidity': 199900,
         'min_fdv': 1000000,
         'max_fdv': float('inf'),
         'min_volume_24h': 1200000,
@@ -51,7 +51,7 @@ class TokenFilter:
     OLD_MID_CAPS = {
         'name': 'Old Mid-Caps',
         'min_liquidity': 100000,
-        'max_liquidity': float('inf'),
+        'max_liquidity': 199900,
         'min_fdv': 200000,
         'max_fdv': 100000000,
         'min_pair_age_hours': 720,
