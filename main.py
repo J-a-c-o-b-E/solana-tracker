@@ -370,17 +370,29 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode='Markdown'
     )
     
+    # Get or initialize shown tokens set for this user
+    user_id = update.effective_user.id
+    if 'shown_tokens' not in context.user_data:
+        context.user_data['shown_tokens'] = set()
+    
+    shown_tokens = context.user_data['shown_tokens']
+    
     # Fetch and filter tokens
     async with aiohttp.ClientSession() as session:
         pairs = await fetch_solana_tokens(session, limit=2000)
         
         print(f"🔍 Checking {len(pairs)} pairs against {filter_config['name']} filter")
         
-        # First try to find perfect matches
+        # First try to find perfect matches (excluding already shown)
         perfect_matches = []
         checked_count = 0
         
         for pair in pairs:
+            pair_address = pair.get('pairAddress')
+            # Skip if already shown to this user
+            if pair_address in shown_tokens:
+                continue
+                
             checked_count += 1
             if matches_filter(pair, filter_config):
                 perfect_matches.append(pair)
@@ -393,9 +405,14 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not perfect_matches:
             print("⚠️ No perfect match, finding best alternative...")
             
-            # Score all tokens and pick the best one
+            # Score all tokens and pick the best one (excluding already shown)
             scored_pairs = []
             for pair in pairs:
+                pair_address = pair.get('pairAddress')
+                # Skip if already shown to this user
+                if pair_address in shown_tokens:
+                    continue
+                    
                 score = 0
                 liquidity = float(pair.get('liquidity', {}).get('usd', 0))
                 fdv = float(pair.get('fdv', 0))
@@ -455,9 +472,10 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 perfect_matches = [best_pair]
                 print(f"✅ Best alternative found (score: {best_score:.0f}): {best_pair.get('baseToken', {}).get('symbol')}")
             else:
-                # Last resort: just pick the first token with good liquidity
+                # Last resort: just pick the first token with good liquidity (not already shown)
                 for pair in pairs:
-                    if float(pair.get('liquidity', {}).get('usd', 0)) > 5000:
+                    pair_address = pair.get('pairAddress')
+                    if pair_address not in shown_tokens and float(pair.get('liquidity', {}).get('usd', 0)) > 5000:
                         perfect_matches = [pair]
                         print(f"✅ Fallback token: {pair.get('baseToken', {}).get('symbol')}")
                         break
@@ -465,6 +483,15 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Send the token (we WILL have one at this point)
         if perfect_matches:
             pair = perfect_matches[0]
+            pair_address = pair.get('pairAddress')
+            
+            # Mark this token as shown to this user
+            shown_tokens.add(pair_address)
+            
+            # Keep only last 50 shown tokens to avoid memory issues
+            if len(shown_tokens) > 50:
+                shown_tokens.pop()
+            
             message = format_token_message(pair)
             await query.message.reply_text(message, parse_mode='Markdown', disable_web_page_preview=True)
         else:
