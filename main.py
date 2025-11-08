@@ -381,7 +381,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text("Invalid filter selected.")
         return
     
-    await query.message.reply_text(
+    # Store message to delete later
+    searching_msg = await query.message.reply_text(
         f"🔍 Searching for **{filter_config['name']}** tokens...\n"
         "This may take a few moments.",
         parse_mode='Markdown'
@@ -509,8 +510,14 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if len(shown_tokens) > 50:
                 shown_tokens.pop()
             
+            # Delete the searching message
+            try:
+                await searching_msg.delete()
+            except:
+                pass
+            
             message = format_token_message(pair, filter_config['name'])
-            await query.message.reply_text(message, parse_mode='Markdown', disable_web_page_preview=True)
+            await query.message.reply_text(message, parse_mode='HTML', disable_web_page_preview=True)
         else:
             # This should never happen now, but just in case
             await query.message.reply_text(
