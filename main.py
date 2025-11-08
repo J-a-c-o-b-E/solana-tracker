@@ -296,14 +296,14 @@ def format_token_message(pair, filter_name=None):
         
         # Category header based on filter
         category_headers = {
-            'Very Degen': '**🔥VERY DEGEN🔥**',
-            'Degen': '**💎DEGEN💎**',
-            'Mid-Caps': '**📈MID-CAPS📈**',
-            'Old Mid-Caps': '**🏦OLD MID-CAPS🏦**',
-            'Larger Mid-Caps': '**💰LARGER MID-CAPS💰**',
+            'Very Degen': '<b>🔥VERY DEGEN🔥</b>',
+            'Degen': '<b>💎DEGEN💎</b>',
+            'Mid-Caps': '<b>📈MID-CAPS📈</b>',
+            'Old Mid-Caps': '<b>🏦OLD MID-CAPS🏦</b>',
+            'Larger Mid-Caps': '<b>💰LARGER MID-CAPS💰</b>',
         }
         
-        header = category_headers.get(filter_name, '**🔍TOKEN**')
+        header = category_headers.get(filter_name, '<b>🔍TOKEN</b>')
         
         message = f"{header}\n\n"
         message += f"🪙 {name} (${symbol})\n\n"
@@ -319,8 +319,8 @@ def format_token_message(pair, filter_name=None):
         message += f"🔥 1H Txns: {txns_1h_total}\n"
         message += f"🔥 24H Txns: {txns_24h_total}\n\n"
         
-        message += f"🔗 [View on Dexscreener]({dex_url})\n"
-        message += f"📍 Pair: `{pair_address}`"
+        message += f"🔗 <a href='{dex_url}'>View on Dexscreener</a>\n"
+        message += f"📍 Pair: <code>{pair_address}</code>"
         
         return message
     except Exception as e:
@@ -544,6 +544,13 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode='Markdown'
     )
     
+    # Store message to delete later
+    searching_msg = await update.message.reply_text(
+        f"🔍 Searching for **{filter_config['name']}** tokens...\n"
+        "This may take a few moments.",
+        parse_mode='Markdown'
+    )
+    
     # Get or initialize shown tokens set for this user
     user_id = update.effective_user.id
     if 'shown_tokens' not in context.user_data:
@@ -666,8 +673,14 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if len(shown_tokens) > 50:
                 shown_tokens.pop()
             
+            # Delete the searching message
+            try:
+                await searching_msg.delete()
+            except:
+                pass
+            
             message = format_token_message(pair, filter_config['name'])
-            await update.message.reply_text(message, parse_mode='Markdown', disable_web_page_preview=True)
+            await update.message.reply_text(message, parse_mode='HTML', disable_web_page_preview=True)
         else:
             # This should never happen now, but just in case
             await update.message.reply_text(
