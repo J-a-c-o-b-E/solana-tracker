@@ -326,10 +326,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [KeyboardButton("Mid-Caps 📈"), KeyboardButton("Old Mid-Caps 🏛️")],
         [KeyboardButton("Larger Mid-Caps 💰")],
     ]
-    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, persistent=True)
+    reply_markup = ReplyKeyboardMarkup(
+        keyboard, 
+        resize_keyboard=True,
+        one_time_keyboard=False,
+        input_field_placeholder="Choose a filter..."
+    )
     
     await update.message.reply_text(
-        "Select a filter:",
+        "👋 Welcome! Use the buttons below to find Solana tokens:",
         reply_markup=reply_markup
     )
 
