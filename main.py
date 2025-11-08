@@ -14,61 +14,61 @@ class TokenFilter:
     
     VERY_DEGEN = {
         'name': 'Very Degen',
-        'min_liquidity': 5000,  # Lowered from 10k
+        'min_liquidity': 10000,
         'max_liquidity': float('inf'),
-        'min_fdv': 50000,  # Lowered from 100k
+        'min_fdv': 100000,
         'max_fdv': float('inf'),
         'min_pair_age_hours': 0,
         'max_pair_age_hours': 48,
-        'min_txns_1h': 10,  # Lowered from 30
+        'min_txns_1h': 30,
         'max_txns_1h': float('inf'),
     }
     
     DEGEN = {
         'name': 'Degen',
-        'min_liquidity': 8000,  # Lowered from 15k
+        'min_liquidity': 15000,
         'max_liquidity': float('inf'),
-        'min_fdv': 50000,  # Lowered from 100k
+        'min_fdv': 100000,
         'max_fdv': float('inf'),
         'min_pair_age_hours': 1,
         'max_pair_age_hours': 72,
-        'min_txns_1h': 20,  # Lowered from 100
+        'min_txns_1h': 100,
         'max_txns_1h': float('inf'),
     }
     
     MID_CAPS = {
         'name': 'Mid-Caps',
-        'min_liquidity': 50000,  # Lowered from 100k
+        'min_liquidity': 100000,
         'max_liquidity': float('inf'),
-        'min_fdv': 500000,  # Lowered from 1M
+        'min_fdv': 1000000,
         'max_fdv': float('inf'),
-        'min_volume_24h': 100000,  # Lowered from 1.2M
+        'min_volume_24h': 1200000,
         'max_volume_24h': float('inf'),
-        'min_txns_24h': 20,  # Lowered from 30
+        'min_txns_24h': 30,
         'max_txns_24h': float('inf'),
     }
     
     OLD_MID_CAPS = {
         'name': 'Old Mid-Caps',
-        'min_liquidity': 50000,  # Lowered from 100k
+        'min_liquidity': 100000,
         'max_liquidity': float('inf'),
-        'min_fdv': 100000,  # Lowered from 200k
+        'min_fdv': 200000,
         'max_fdv': 100000000,
         'min_pair_age_hours': 720,
         'max_pair_age_hours': 2800,
-        'min_volume_24h': 50000,  # Lowered from 200k
+        'min_volume_24h': 200000,
         'max_volume_24h': float('inf'),
-        'min_txns_24h': 100,  # Lowered from 2000
+        'min_txns_24h': 2000,
         'max_txns_24h': float('inf'),
     }
     
     LARGER_MID_CAPS = {
         'name': 'Larger Mid-Caps',
-        'min_liquidity': 100000,  # Lowered from 200k
+        'min_liquidity': 200000,
         'max_liquidity': float('inf'),
-        'min_mcap': 500000,  # Lowered from 1M
+        'min_mcap': 1000000,
         'max_mcap': float('inf'),
-        'min_volume_6h': 50000,  # Lowered from 150k
+        'min_volume_6h': 150000,
         'max_volume_6h': float('inf'),
     }
 
@@ -313,21 +313,15 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if matches_filter(pair, filter_config):
                 matching_pairs.append(pair)
                 print(f"✅ Match found: {pair.get('baseToken', {}).get('symbol')}")
-                if len(matching_pairs) >= 10:  # Limit to 10 results
-                    break
+                break  # Stop after finding 1 token
         
         print(f"📊 Checked {checked_count} pairs, found {len(matching_pairs)} matches")
         
         if matching_pairs:
-            await query.message.reply_text(
-                f"✅ Found {len(matching_pairs)} tokens matching **{filter_config['name']}** criteria:",
-                parse_mode='Markdown'
-            )
-            
-            for pair in matching_pairs:
-                message = format_token_message(pair)
-                await query.message.reply_text(message, parse_mode='Markdown', disable_web_page_preview=True)
-                await asyncio.sleep(0.5)  # Avoid rate limiting
+            # Send the single token
+            pair = matching_pairs[0]
+            message = format_token_message(pair)
+            await query.message.reply_text(message, parse_mode='Markdown', disable_web_page_preview=True)
         else:
             await query.message.reply_text(
                 f"❌ No tokens found matching **{filter_config['name']}** criteria.\n"
@@ -378,25 +372,17 @@ async def auto_scan(context: ContextTypes.DEFAULT_TYPE):
             for pair in pairs:
                 if matches_filter(pair, TokenFilter.VERY_DEGEN):
                     matching_pairs.append(pair)
-                    if len(matching_pairs) >= 5:  # Limit to top 5 gems
-                        break
+                    break  # Only get 1 token
             
             if matching_pairs:
+                pair = matching_pairs[0]
+                message = format_token_message(pair)
                 await context.bot.send_message(
                     chat_id=group_chat_id,
-                    text=f"🔥 **Auto Scan Alert!**\n\nFound {len(matching_pairs)} Very Degen tokens:",
-                    parse_mode='Markdown'
+                    text=f"🔥 **Auto Scan Alert - Very Degen Gem Found!**\n\n{message}",
+                    parse_mode='Markdown',
+                    disable_web_page_preview=True
                 )
-                
-                for pair in matching_pairs:
-                    message = format_token_message(pair)
-                    await context.bot.send_message(
-                        chat_id=group_chat_id,
-                        text=message,
-                        parse_mode='Markdown',
-                        disable_web_page_preview=True
-                    )
-                    await asyncio.sleep(1)
     except Exception as e:
         print(f"Error in auto_scan: {e}")
 
