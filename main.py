@@ -73,7 +73,7 @@ class TokenFilter:
     }
 
 
-async def fetch_solana_tokens(session, limit=1000):
+async def fetch_solana_tokens(session, limit=2000):
     """Fetch latest Solana tokens from Dexscreener using multiple endpoints"""
     all_pairs = []
     seen_addresses = set()  # Avoid duplicates
@@ -96,12 +96,16 @@ async def fetch_solana_tokens(session, limit=1000):
                                 pair_address and pair_address not in seen_addresses):
                                 all_pairs.append(pair)
                                 seen_addresses.add(pair_address)
-                await asyncio.sleep(0.2)
+                await asyncio.sleep(0.15)
             except Exception as e:
                 print(f"Error fetching from {dex}: {e}")
         
-        # Method 2: Search by popular terms
-        search_terms = ['solana', 'meme', 'coin', 'token', 'pepe', 'doge', 'ai', 'dao', 'new']
+        # Method 2: Search by popular terms and categories
+        search_terms = [
+            'solana', 'meme', 'coin', 'token', 'new', 'ai', 'dao', 'nft',
+            'pepe', 'doge', 'cat', 'dog', 'frog', 'baby', 'moon', 'safe',
+            'elon', 'trump', 'chad', 'wojak', 'bonk', 'inu', 'shib'
+        ]
         for term in search_terms:
             try:
                 url = f"https://api.dexscreener.com/latest/dex/search?q={term}"
@@ -116,11 +120,31 @@ async def fetch_solana_tokens(session, limit=1000):
                                 pair_address and pair_address not in seen_addresses):
                                 all_pairs.append(pair)
                                 seen_addresses.add(pair_address)
-                await asyncio.sleep(0.2)
+                await asyncio.sleep(0.15)
             except Exception as e:
                 print(f"Error fetching for {term}: {e}")
         
-        # Method 3: Get trending/boosted tokens
+        # Method 3: Alphabet search for maximum coverage
+        letters = ['a', 'b', 'c', 'd', 'e', 'sol']
+        for letter in letters:
+            try:
+                url = f"https://api.dexscreener.com/latest/dex/search?q={letter}"
+                async with session.get(url) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        pairs = data.get('pairs', [])
+                        for pair in pairs:
+                            pair_address = pair.get('pairAddress')
+                            if (pair.get('chainId') == 'solana' and 
+                                pair.get('liquidity', {}).get('usd', 0) > 0 and
+                                pair_address and pair_address not in seen_addresses):
+                                all_pairs.append(pair)
+                                seen_addresses.add(pair_address)
+                await asyncio.sleep(0.15)
+            except:
+                pass
+        
+        # Method 4: Get trending/boosted tokens
         try:
             url = "https://api.dexscreener.com/token-boosts/top/v1"
             async with session.get(url) as response:
@@ -147,8 +171,12 @@ async def fetch_solana_tokens(session, limit=1000):
                   f"Liq: ${first.get('liquidity', {}).get('usd', 0):,.0f}, "
                   f"FDV: ${first.get('fdv', 0):,.0f}, "
                   f"DEX: {first.get('dexId')}")
-            print(f"📈 Age range: newest={calculate_pair_age_hours(all_pairs[0].get('pairCreatedAt')):.1f}h, "
-                  f"oldest={calculate_pair_age_hours(all_pairs[-1].get('pairCreatedAt')):.1f}h")
+            
+            # Show age range
+            newest_age = calculate_pair_age_hours(all_pairs[0].get('pairCreatedAt'))
+            oldest_age = calculate_pair_age_hours(all_pairs[-1].get('pairCreatedAt'))
+            if newest_age and oldest_age:
+                print(f"📈 Age range: newest={newest_age:.1f}h, oldest={oldest_age:.1f}h")
         else:
             print("⚠️ No Solana pairs found")
         
@@ -344,20 +372,45 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Fetch and filter tokens
     async with aiohttp.ClientSession() as session:
-        pairs = await fetch_solana_tokens(session, limit=1000)
+        pairs = await fetch_solana_tokens(session, limit=2000)
         
         print(f"🔍 Checking {len(pairs)} pairs against {filter_config['name']} filter")
         
         matching_pairs = []
         checked_count = 0
+        closest_match = None
+        min_difference = float('inf')
+        
         for pair in pairs:
             checked_count += 1
             if matches_filter(pair, filter_config):
                 matching_pairs.append(pair)
                 print(f"✅ Match found: {pair.get('baseToken', {}).get('symbol')}")
                 break  # Stop after finding 1 token
+            else:
+                # Track closest match in case no perfect match exists
+                liquidity = float(pair.get('liquidity', {}).get('usd', 0))
+                target_min = filter_config.get('min_liquidity', 0)
+                target_max = filter_config.get('max_liquidity', float('inf'))
+                
+                # Calculate how far off this token is from the filter
+                if liquidity < target_min:
+                    difference = target_min - liquidity
+                elif liquidity > target_max:
+                    difference = liquidity - target_max
+                else:
+                    difference = 0
+                
+                if difference < min_difference and liquidity > 1000:  # Must have some liquidity
+                    min_difference = difference
+                    closest_match = pair
         
-        print(f"📊 Checked {checked_count} pairs, found {len(matching_pairs)} matches")
+        print(f"📊 Checked {checked_count} pairs, found {len(matching_pairs)} perfect matches")
+        
+        # If no perfect match, use closest match
+        if not matching_pairs and closest_match:
+            matching_pairs = [closest_match]
+            print(f"⚠️ No perfect match, using closest: {closest_match.get('baseToken', {}).get('symbol')}")
         
         if matching_pairs:
             # Send the single token
@@ -365,9 +418,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             message = format_token_message(pair)
             await query.message.reply_text(message, parse_mode='Markdown', disable_web_page_preview=True)
         else:
+            # This should never happen now, but just in case
             await query.message.reply_text(
-                f"❌ No tokens found matching **{filter_config['name']}** criteria.\n"
-                "Try again later or select a different filter.",
+                f"❌ Unable to find any tokens. Please try again in a moment.",
                 parse_mode='Markdown'
             )
 
@@ -408,7 +461,7 @@ async def auto_scan(context: ContextTypes.DEFAULT_TYPE):
         
         # Scan with Very Degen filter (most aggressive for new gems)
         async with aiohttp.ClientSession() as session:
-            pairs = await fetch_solana_tokens(session, limit=1000)
+            pairs = await fetch_solana_tokens(session, limit=2000)
             
             matching_pairs = []
             for pair in pairs:
