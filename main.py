@@ -381,7 +381,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text("Invalid filter selected.")
         return
     
-    await query.message.reply_text(
+    searching_msg = await query.message.reply_text(
         f"🔍 Searching for **{filter_config['name']}** tokens...\n"
         "This may take a few moments.",
         parse_mode='Markdown'
@@ -508,6 +508,12 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Keep only last 50 shown tokens to avoid memory issues
             if len(shown_tokens) > 50:
                 shown_tokens.pop()
+            
+            # Delete the searching message
+            try:
+                await searching_msg.delete()
+            except:
+                pass
             
             message = format_token_message(pair, filter_config['name'])
             await query.message.reply_text(message, parse_mode='HTML', disable_web_page_preview=True)
@@ -538,13 +544,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Unknown text - ignore
         return
     
-    await update.message.reply_text(
-        f"🔍 Searching for **{filter_config['name']}** tokens...\n"
-        "This may take a few moments.",
-        parse_mode='Markdown'
-    )
-    
-    await update.message.reply_text(
+    searching_msg = await update.message.reply_text(
         f"🔍 Searching for **{filter_config['name']}** tokens...\n"
         "This may take a few moments.",
         parse_mode='Markdown'
@@ -671,6 +671,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Keep only last 50 shown tokens to avoid memory issues
             if len(shown_tokens) > 50:
                 shown_tokens.pop()
+            
+            # Delete the searching message
+            try:
+                await searching_msg.delete()
+            except:
+                pass
             
             message = format_token_message(pair, filter_config['name'])
             await update.message.reply_text(message, parse_mode='HTML', disable_web_page_preview=True)
