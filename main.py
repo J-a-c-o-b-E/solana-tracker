@@ -346,7 +346,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     
     welcome_message = (
-        "Welcome to the Memecoin Method Tracker_ 🔍\n\n"
+        "Welcome to the Memecoin Method Tracker 🔍\n\n"
         "Find hidden gems on Solana based on our proven filters. "
         "Select your desired token type below:\n\n"
         "🔥 Very Degen → 0-48h old, $10K-$15K liquidity\n"
@@ -381,8 +381,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text("Invalid filter selected.")
         return
     
-    # Store message to delete later
-    searching_msg = await query.message.reply_text(
+    await query.message.reply_text(
         f"🔍 Searching for **{filter_config['name']}** tokens...\n"
         "This may take a few moments.",
         parse_mode='Markdown'
@@ -509,12 +508,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Keep only last 50 shown tokens to avoid memory issues
             if len(shown_tokens) > 50:
                 shown_tokens.pop()
-            
-            # Delete the searching message
-            try:
-                await searching_msg.delete()
-            except:
-                pass
             
             message = format_token_message(pair, filter_config['name'])
             await query.message.reply_text(message, parse_mode='HTML', disable_web_page_preview=True)
@@ -551,8 +544,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode='Markdown'
     )
     
-    # Store message to delete later
-    searching_msg = await update.message.reply_text(
+    await update.message.reply_text(
         f"🔍 Searching for **{filter_config['name']}** tokens...\n"
         "This may take a few moments.",
         parse_mode='Markdown'
@@ -679,12 +671,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Keep only last 50 shown tokens to avoid memory issues
             if len(shown_tokens) > 50:
                 shown_tokens.pop()
-            
-            # Delete the searching message
-            try:
-                await searching_msg.delete()
-            except:
-                pass
             
             message = format_token_message(pair, filter_config['name'])
             await update.message.reply_text(message, parse_mode='HTML', disable_web_page_preview=True)
