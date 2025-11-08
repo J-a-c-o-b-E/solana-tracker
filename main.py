@@ -376,45 +376,95 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         print(f"🔍 Checking {len(pairs)} pairs against {filter_config['name']} filter")
         
-        matching_pairs = []
+        # First try to find perfect matches
+        perfect_matches = []
         checked_count = 0
-        closest_match = None
-        min_difference = float('inf')
         
         for pair in pairs:
             checked_count += 1
             if matches_filter(pair, filter_config):
-                matching_pairs.append(pair)
-                print(f"✅ Match found: {pair.get('baseToken', {}).get('symbol')}")
-                break  # Stop after finding 1 token
-            else:
-                # Track closest match in case no perfect match exists
+                perfect_matches.append(pair)
+                print(f"✅ Perfect match found: {pair.get('baseToken', {}).get('symbol')}")
+                break  # Stop after finding 1 perfect match
+        
+        print(f"📊 Checked {checked_count} pairs, found {len(perfect_matches)} perfect matches")
+        
+        # If no perfect match, find the BEST token that's closest to criteria
+        if not perfect_matches:
+            print("⚠️ No perfect match, finding best alternative...")
+            
+            # Score all tokens and pick the best one
+            scored_pairs = []
+            for pair in pairs:
+                score = 0
                 liquidity = float(pair.get('liquidity', {}).get('usd', 0))
-                target_min = filter_config.get('min_liquidity', 0)
-                target_max = filter_config.get('max_liquidity', float('inf'))
+                fdv = float(pair.get('fdv', 0))
                 
-                # Calculate how far off this token is from the filter
-                if liquidity < target_min:
-                    difference = target_min - liquidity
-                elif liquidity > target_max:
-                    difference = liquidity - target_max
+                # Skip tokens with no data
+                if liquidity < 1000:
+                    continue
+                
+                # Score based on how close to target liquidity range
+                target_liq_min = filter_config.get('min_liquidity', 0)
+                target_liq_max = filter_config.get('max_liquidity', float('inf'))
+                
+                if target_liq_min <= liquidity <= target_liq_max:
+                    score += 100  # Perfect liquidity range
                 else:
-                    difference = 0
+                    # Calculate distance from range
+                    if liquidity < target_liq_min:
+                        diff_pct = abs(liquidity - target_liq_min) / target_liq_min
+                    else:
+                        diff_pct = abs(liquidity - target_liq_max) / target_liq_max
+                    score += max(0, 50 - diff_pct * 50)
                 
-                if difference < min_difference and liquidity > 1000:  # Must have some liquidity
-                    min_difference = difference
-                    closest_match = pair
+                # Score FDV if applicable
+                if 'min_fdv' in filter_config:
+                    target_fdv_min = filter_config.get('min_fdv', 0)
+                    target_fdv_max = filter_config.get('max_fdv', float('inf'))
+                    if target_fdv_min <= fdv <= target_fdv_max:
+                        score += 50
+                
+                # Score age if applicable
+                if 'min_pair_age_hours' in filter_config:
+                    pair_created = pair.get('pairCreatedAt')
+                    if pair_created:
+                        age_hours = calculate_pair_age_hours(pair_created)
+                        if age_hours:
+                            target_age_min = filter_config.get('min_pair_age_hours', 0)
+                            target_age_max = filter_config.get('max_pair_age_hours', float('inf'))
+                            if target_age_min <= age_hours <= target_age_max:
+                                score += 50
+                
+                # Score transactions if applicable
+                if 'min_txns_1h' in filter_config:
+                    txns_1h = pair.get('txns', {}).get('h1', {})
+                    txns_total = txns_1h.get('buys', 0) + txns_1h.get('sells', 0)
+                    target_min = filter_config.get('min_txns_1h', 0)
+                    if txns_total >= target_min:
+                        score += 30
+                
+                if score > 0:
+                    scored_pairs.append((score, pair))
+            
+            # Sort by score and pick the best
+            scored_pairs.sort(reverse=True, key=lambda x: x[0])
+            
+            if scored_pairs:
+                best_score, best_pair = scored_pairs[0]
+                perfect_matches = [best_pair]
+                print(f"✅ Best alternative found (score: {best_score:.0f}): {best_pair.get('baseToken', {}).get('symbol')}")
+            else:
+                # Last resort: just pick the first token with good liquidity
+                for pair in pairs:
+                    if float(pair.get('liquidity', {}).get('usd', 0)) > 5000:
+                        perfect_matches = [pair]
+                        print(f"✅ Fallback token: {pair.get('baseToken', {}).get('symbol')}")
+                        break
         
-        print(f"📊 Checked {checked_count} pairs, found {len(matching_pairs)} perfect matches")
-        
-        # If no perfect match, use closest match
-        if not matching_pairs and closest_match:
-            matching_pairs = [closest_match]
-            print(f"⚠️ No perfect match, using closest: {closest_match.get('baseToken', {}).get('symbol')}")
-        
-        if matching_pairs:
-            # Send the single token
-            pair = matching_pairs[0]
+        # Send the token (we WILL have one at this point)
+        if perfect_matches:
+            pair = perfect_matches[0]
             message = format_token_message(pair)
             await query.message.reply_text(message, parse_mode='Markdown', disable_web_page_preview=True)
         else:
