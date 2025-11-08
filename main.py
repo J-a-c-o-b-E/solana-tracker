@@ -346,7 +346,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     
     welcome_message = (
-        "Welcome to the Memecoin Method Tracker 🔍\n\n"
+        "Welcome to the Memecoin Method Tracker_ 🔍\n\n"
         "Find hidden gems on Solana based on our proven filters. "
         "Select your desired token type below:\n\n"
         "🔥 Very Degen → 0-48h old, $10K-$15K liquidity\n"
