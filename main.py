@@ -265,11 +265,10 @@ def matches_filter(pair, filter_config):
         return False
 
 
-def format_token_message(pair):
+def format_token_message(pair, filter_name=None):
     """Format token data into a readable message"""
     try:
         base_token = pair.get('baseToken', {})
-        quote_token = pair.get('quoteToken', {})
         
         name = base_token.get('name', 'Unknown')
         symbol = base_token.get('symbol', 'Unknown')
@@ -295,7 +294,19 @@ def format_token_message(pair):
         dex_url = pair.get('url', '#')
         pair_address = pair.get('pairAddress', 'N/A')
         
-        message = f"🪙 **{name}** (${symbol})\n\n"
+        # Category header based on filter
+        category_headers = {
+            'Very Degen': '🔥VERY DEGEN🔥',
+            'Degen': '💎DEGEN💎',
+            'Mid-Caps': '📈MID-CAPS📈',
+            'Old Mid-Caps': '🏦OLD MID-CAPS🏦',
+            'Larger Mid-Caps': '💰LARGER MID-CAPS💰',
+        }
+        
+        header = category_headers.get(filter_name, '🔍TOKEN')
+        
+        message = f"{header}\n\n"
+        message += f"🪙 {name} (${symbol})\n\n"
         message += f"💵 Price: ${price_usd:.8f}\n"
         message += f"💧 Liquidity: ${liquidity:,.0f}\n"
         message += f"📊 FDV: ${fdv:,.0f}\n"
@@ -303,7 +314,8 @@ def format_token_message(pair):
         message += f"📈 24h Volume: ${volume_24h:,.0f}\n"
         message += f"🔄 24h Change: {price_change_24h:.2f}%\n\n"
         
-        message += f"⏱️ Pair Age: {age_hours:.1f} hours\n" if age_hours else ""
+        if age_hours:
+            message += f"⏱️ Pair Age: {age_hours:.1f} hours\n"
         message += f"🔥 1H Txns: {txns_1h_total}\n"
         message += f"🔥 24H Txns: {txns_24h_total}\n\n"
         
@@ -333,8 +345,20 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         input_field_placeholder="Choose a filter..."
     )
     
+    welcome_message = (
+        "Welcome to the Memecoin Method Tracker 🔍\n\n"
+        "Find hidden gems on Solana based on our proven filters. "
+        "Select your desired token type below:\n\n"
+        "🔥 Very Degen → 0-48h old, $10K-$15K liquidity\n"
+        "💎 Degen → 1-72h old, high volume\n"
+        "📈 Mid-Caps → Established tokens\n"
+        "🏛️ Old Mid-Caps → Mature projects\n"
+        "💰 Larger Mid-Caps → $200K+ liquidity\n\n"
+        "Tap a button below! 👇"
+    )
+    
     await update.message.reply_text(
-        "👋 Welcome! Use the buttons below to find Solana tokens:",
+        welcome_message,
         reply_markup=reply_markup
     )
 
@@ -485,7 +509,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if len(shown_tokens) > 50:
                 shown_tokens.pop()
             
-            message = format_token_message(pair)
+            message = format_token_message(pair, filter_config['name'])
             await query.message.reply_text(message, parse_mode='Markdown', disable_web_page_preview=True)
         else:
             # This should never happen now, but just in case
@@ -642,7 +666,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if len(shown_tokens) > 50:
                 shown_tokens.pop()
             
-            message = format_token_message(pair)
+            message = format_token_message(pair, filter_config['name'])
             await update.message.reply_text(message, parse_mode='Markdown', disable_web_page_preview=True)
         else:
             # This should never happen now, but just in case
@@ -698,7 +722,7 @@ async def auto_scan(context: ContextTypes.DEFAULT_TYPE):
             
             if matching_pairs:
                 pair = matching_pairs[0]
-                message = format_token_message(pair)
+                message = format_token_message(pair, 'Very Degen')
                 await context.bot.send_message(
                     chat_id=group_chat_id,
                     text=f"🔥 **Auto Scan Alert - Very Degen Gem Found!**\n\n{message}",
