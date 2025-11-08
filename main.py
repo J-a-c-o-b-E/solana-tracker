@@ -319,30 +319,17 @@ def format_token_message(pair):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start command handler"""
     keyboard = [
-        [
-            InlineKeyboardButton("Very Degen 🔥", callback_data='very_degen'),
-            InlineKeyboardButton("Degen 💎", callback_data='degen'),
-        ],
-        [
-            InlineKeyboardButton("Mid-Caps 📈", callback_data='mid_caps'),
-            InlineKeyboardButton("Old Mid-Caps 🏛️", callback_data='old_mid_caps'),
-        ],
-        [
-            InlineKeyboardButton("Larger Mid-Caps 💰", callback_data='larger_mid_caps'),
-        ],
+        [InlineKeyboardButton("Very Degen 🔥", callback_data='very_degen')],
+        [InlineKeyboardButton("Degen 💎", callback_data='degen')],
+        [InlineKeyboardButton("Mid-Caps 📈", callback_data='mid_caps')],
+        [InlineKeyboardButton("Old Mid-Caps 🏛️", callback_data='old_mid_caps')],
+        [InlineKeyboardButton("Larger Mid-Caps 💰", callback_data='larger_mid_caps')],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await update.message.reply_text(
-        "🔍 **Solana Gem Finder Bot**\n\n"
-        "Select a filter to find hidden gems on Solana:\n\n"
-        "🔥 Very Degen - Fresh pairs, 0-48h old\n"
-        "💎 Degen - Young pairs, 1-72h old\n"
-        "📈 Mid-Caps - Established tokens\n"
-        "🏛️ Old Mid-Caps - Mature projects\n"
-        "💰 Larger Mid-Caps - Higher liquidity",
-        reply_markup=reply_markup,
-        parse_mode='Markdown'
+        "Select a filter:",
+        reply_markup=reply_markup
     )
 
 
@@ -502,6 +489,23 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
 
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle any text message - just show the buttons again"""
+    keyboard = [
+        [InlineKeyboardButton("Very Degen 🔥", callback_data='very_degen')],
+        [InlineKeyboardButton("Degen 💎", callback_data='degen')],
+        [InlineKeyboardButton("Mid-Caps 📈", callback_data='mid_caps')],
+        [InlineKeyboardButton("Old Mid-Caps 🏛️", callback_data='old_mid_caps')],
+        [InlineKeyboardButton("Larger Mid-Caps 💰", callback_data='larger_mid_caps')],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(
+        "Select a filter:",
+        reply_markup=reply_markup
+    )
+
+
 async def scan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Manual scan command for groups"""
     keyboard = [
@@ -583,6 +587,10 @@ def main():
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("scan", scan_command))
     application.add_handler(CallbackQueryHandler(button_callback))
+    
+    # Handle all other text messages - just show buttons
+    from telegram.ext import MessageHandler, filters
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     
     # Add auto-scan job (runs every 30 minutes)
     job_queue = application.job_queue
