@@ -46,23 +46,29 @@ class SmartMoneyTracker:
     def calculate_metrics(pair):
         """Calculate recent buys, volume, and average buy from pair data
         
-        NOTE: Dexscreener API only provides 5min and 1hour data, not 2-3min.
-        We'll use 5min data as closest approximation.
+        Uses 5min data scaled to approximate 2-3 min window.
+        Also validates with 1h data to ensure real activity.
         """
         try:
             # Get transaction data
             txns = pair.get('txns', {})
-            m5 = txns.get('m5', {})  # 5 minute data (closest to 2-3 min)
+            m5 = txns.get('m5', {})  # 5 minute data
+            h1 = txns.get('h1', {})  # 1 hour data
             
-            # Recent buys (using 5min window)
+            # Get 5min buys
             buys_5min = m5.get('buys', 0)
-            sells_5min = m5.get('sells', 0)
             
-            # Calculate estimated 2-3 min values (scale down from 5min)
-            # Assume 2.5 min average, so multiply by 0.5 (2.5/5)
+            # Validate with 1h data - token must have sustained activity
+            buys_1h = h1.get('buys', 0)
+            if buys_1h < 10:  # Filter out dead tokens
+                return None
+            
+            # Calculate estimated 2-3 min values
+            # Use 2.5 min as target (halfway between 2-3)
+            # Scale factor: 2.5/5 = 0.5
             recent_buys = int(buys_5min * 0.5)
             
-            # Volume in last 5 minutes
+            # Get volume data
             volume_5min = float(pair.get('volume', {}).get('m5', 0))
             
             # Scale to 2-3 min estimate
@@ -71,11 +77,16 @@ class SmartMoneyTracker:
             # Calculate average buy size
             avg_buy = volume_2_3min / recent_buys if recent_buys > 0 else 0
             
+            # Additional validation - check if numbers make sense
+            if recent_buys < 1 or volume_2_3min < 100:
+                return None
+            
             return {
                 'recent_buys': recent_buys,
                 'volume': volume_2_3min,
                 'avg_buy': avg_buy,
-                'buys_5min': buys_5min,  # Keep original for reference
+                'buys_5min': buys_5min,
+                'buys_1h': buys_1h,
                 'volume_5min': volume_5min,
             }
         except Exception as e:
@@ -111,22 +122,6 @@ class SmartMoneyTracker:
         return None
     
     @staticmethod
-    def should_alert(pair_address):
-        """Check if we should alert on this token (not already alerted)"""
-        if pair_address in SmartMoneyTracker.alerted_tokens:
-            return False
-        
-        # Add to alerted set
-        SmartMoneyTracker.alerted_tokens.add(pair_address)
-        
-        # Keep only last 100 tokens to avoid memory issues
-        if len(SmartMoneyTracker.alerted_tokens) > 100:
-            # Remove oldest (first) item
-            SmartMoneyTracker.alerted_tokens.pop()
-        
-        return True
-    
-    @staticmethod
     async def perform_safety_checks(pair):
         """Perform basic safety checks on the token"""
         checks = {
@@ -153,7 +148,7 @@ class SmartMoneyTracker:
 
 
 async def scan_for_signals(context: ContextTypes.DEFAULT_TYPE):
-    """Scan Solana tokens for volume spike signals"""
+    """Scan Solana tokens for volume spike signals - find ONE best signal per cycle"""
     try:
         # Get user chat IDs from context (users who have started the bot)
         if 'active_chats' not in context.bot_data:
@@ -163,8 +158,13 @@ async def scan_for_signals(context: ContextTypes.DEFAULT_TYPE):
         if not active_chats:
             return  # No one subscribed
         
+        print(f"\n🔍 Starting scan cycle at {datetime.now().strftime('%H:%M:%S')}")
+        
+        # Collect all valid signals first
+        all_signals = []
+        
         # Search for recent Solana tokens
-        search_terms = ['pump', 'raydium', 'orca']
+        search_terms = ['pump', 'raydium', 'orca', 'meteora']
         
         async with aiohttp.ClientSession() as session:
             for term in search_terms:
@@ -178,11 +178,11 @@ async def scan_for_signals(context: ContextTypes.DEFAULT_TYPE):
                             # Filter for Solana
                             solana_pairs = [p for p in pairs if p.get('chainId') == 'solana']
                             
-                            for pair in solana_pairs[:15]:  # Check top 15
+                            for pair in solana_pairs[:20]:  # Check top 20
                                 pair_address = pair.get('pairAddress')
                                 
                                 # Skip if already alerted
-                                if not SmartMoneyTracker.should_alert(pair_address):
+                                if pair_address in SmartMoneyTracker.alerted_tokens:
                                     continue
                                 
                                 # Calculate metrics
@@ -198,36 +198,78 @@ async def scan_for_signals(context: ContextTypes.DEFAULT_TYPE):
                                 # Perform safety checks
                                 safety = await SmartMoneyTracker.perform_safety_checks(pair)
                                 
-                                # Only alert if passes liquidity check
+                                # Only include if passes liquidity check
                                 if not safety['liquidity_ok']:
                                     continue
                                 
-                                # Format and send alert to all active chats
-                                message = format_signal_alert(pair, tier, metrics, safety)
+                                # Add to valid signals with tier priority
+                                tier_priority = {
+                                    'VERY_STRONG': 4,
+                                    'STRONG': 3,
+                                    'MEDIUM': 2,
+                                    'FIRST_CALL': 1,
+                                }
                                 
-                                for chat_id in active_chats:
-                                    try:
-                                        await context.bot.send_message(
-                                            chat_id=chat_id,
-                                            text=message,
-                                            parse_mode='HTML',
-                                            disable_web_page_preview=True
-                                        )
-                                    except Exception as e:
-                                        print(f"Error sending to chat {chat_id}: {e}")
-                                
-                                print(f"📢 Alert sent: {tier} - {pair.get('baseToken', {}).get('symbol')}")
-                                
-                                # Don't spam - wait between alerts
-                                await asyncio.sleep(1)
+                                all_signals.append({
+                                    'pair': pair,
+                                    'tier': tier,
+                                    'metrics': metrics,
+                                    'safety': safety,
+                                    'priority': tier_priority.get(tier, 0),
+                                    'volume': metrics['volume'],
+                                })
                 
                 except Exception as e:
-                    print(f"Error scanning {term}: {e}")
+                    print(f"❌ Error scanning {term}: {e}")
                 
-                await asyncio.sleep(0.3)  # Rate limiting between searches
+                await asyncio.sleep(0.2)  # Rate limiting
+        
+        # Sort by priority (tier) then by volume
+        all_signals.sort(key=lambda x: (x['priority'], x['volume']), reverse=True)
+        
+        # Send ONLY the best signal (if any)
+        if all_signals:
+            best_signal = all_signals[0]
+            pair = best_signal['pair']
+            tier = best_signal['tier']
+            metrics = best_signal['metrics']
+            safety = best_signal['safety']
+            pair_address = pair.get('pairAddress')
+            
+            # Mark as alerted
+            SmartMoneyTracker.alerted_tokens.add(pair_address)
+            
+            # Keep only last 100 tokens
+            if len(SmartMoneyTracker.alerted_tokens) > 100:
+                # Convert to list, remove first, convert back
+                temp = list(SmartMoneyTracker.alerted_tokens)
+                temp.pop(0)
+                SmartMoneyTracker.alerted_tokens = set(temp)
+            
+            # Format message
+            message = format_signal_alert(pair, tier, metrics, safety)
+            
+            # Send to all active chats
+            for chat_id in active_chats:
+                try:
+                    await context.bot.send_message(
+                        chat_id=chat_id,
+                        text=message,
+                        parse_mode='HTML',
+                        disable_web_page_preview=True
+                    )
+                except Exception as e:
+                    print(f"❌ Error sending to chat {chat_id}: {e}")
+            
+            symbol = pair.get('baseToken', {}).get('symbol', 'Unknown')
+            print(f"✅ Alert sent: {tier} - ${symbol} (Vol: ${metrics['volume']:,.0f})")
+        else:
+            print(f"⏭️ No valid signals found this cycle - skipping")
     
     except Exception as e:
-        print(f"Error in scan_for_signals: {e}")
+        print(f"❌ Error in scan_for_signals: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 def format_signal_alert(pair, tier, metrics, safety):
