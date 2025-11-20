@@ -11,6 +11,9 @@ DEXSCREENER_API = "https://api.dexscreener.com/latest/dex/search?q="
 class SmartMoneyTracker:
     """Tracks volume spikes and buying pressure on Solana tokens"""
     
+    # Track tokens we've already alerted on
+    alerted_tokens = set()
+    
     # Signal strength tiers based on your images
     TIERS = {
         'FIRST_CALL': {
@@ -41,26 +44,39 @@ class SmartMoneyTracker:
     
     @staticmethod
     def calculate_metrics(pair):
-        """Calculate recent buys, volume, and average buy from pair data"""
+        """Calculate recent buys, volume, and average buy from pair data
+        
+        NOTE: Dexscreener API only provides 5min and 1hour data, not 2-3min.
+        We'll use 5min data as closest approximation.
+        """
         try:
             # Get transaction data
             txns = pair.get('txns', {})
-            m5 = txns.get('m5', {})  # 5 minute data
-            h1 = txns.get('h1', {})  # 1 hour data
+            m5 = txns.get('m5', {})  # 5 minute data (closest to 2-3 min)
             
-            # Recent buys (last 2-3 minutes - use 5min data as proxy)
-            recent_buys = m5.get('buys', 0)
+            # Recent buys (using 5min window)
+            buys_5min = m5.get('buys', 0)
+            sells_5min = m5.get('sells', 0)
             
-            # Volume in last 2-3 minutes
+            # Calculate estimated 2-3 min values (scale down from 5min)
+            # Assume 2.5 min average, so multiply by 0.5 (2.5/5)
+            recent_buys = int(buys_5min * 0.5)
+            
+            # Volume in last 5 minutes
             volume_5min = float(pair.get('volume', {}).get('m5', 0))
             
+            # Scale to 2-3 min estimate
+            volume_2_3min = volume_5min * 0.5
+            
             # Calculate average buy size
-            avg_buy = volume_5min / recent_buys if recent_buys > 0 else 0
+            avg_buy = volume_2_3min / recent_buys if recent_buys > 0 else 0
             
             return {
                 'recent_buys': recent_buys,
-                'volume': volume_5min,
+                'volume': volume_2_3min,
                 'avg_buy': avg_buy,
+                'buys_5min': buys_5min,  # Keep original for reference
+                'volume_5min': volume_5min,
             }
         except Exception as e:
             print(f"Error calculating metrics: {e}")
@@ -80,19 +96,35 @@ class SmartMoneyTracker:
         if recent_buys >= 80 or volume >= 20000:
             return 'VERY_STRONG'
         
-        # Check STRONG
+        # Check STRONG (ALL conditions must be met)
         if recent_buys >= 45 and volume >= 10000 and avg_buy >= 100:
             return 'STRONG'
         
-        # Check MEDIUM
+        # Check MEDIUM (ALL conditions must be met)
         if recent_buys >= 30 and volume >= 6000 and avg_buy >= 75:
             return 'MEDIUM'
         
-        # Check FIRST_CALL
+        # Check FIRST_CALL (ALL conditions must be met)
         if recent_buys >= 20 and volume >= 3000 and avg_buy >= 50:
             return 'FIRST_CALL'
         
         return None
+    
+    @staticmethod
+    def should_alert(pair_address):
+        """Check if we should alert on this token (not already alerted)"""
+        if pair_address in SmartMoneyTracker.alerted_tokens:
+            return False
+        
+        # Add to alerted set
+        SmartMoneyTracker.alerted_tokens.add(pair_address)
+        
+        # Keep only last 100 tokens to avoid memory issues
+        if len(SmartMoneyTracker.alerted_tokens) > 100:
+            # Remove oldest (first) item
+            SmartMoneyTracker.alerted_tokens.pop()
+        
+        return True
     
     @staticmethod
     async def perform_safety_checks(pair):
@@ -100,7 +132,6 @@ class SmartMoneyTracker:
         checks = {
             'liquidity_ok': False,
             'age_ok': False,
-            'honeypot_risk': False,
             'holder_concentration': 'Unknown',
         }
         
@@ -109,15 +140,11 @@ class SmartMoneyTracker:
             liquidity = float(pair.get('liquidity', {}).get('usd', 0))
             checks['liquidity_ok'] = liquidity > 5000
             
-            # Check pair age (prefer tokens deployed in last 24 hours)
+            # Check pair age (prefer tokens deployed in last 48 hours)
             pair_created = pair.get('pairCreatedAt')
             if pair_created:
                 age_hours = (datetime.now().timestamp() - pair_created / 1000) / 3600
-                checks['age_ok'] = age_hours < 24
-            
-            # Basic honeypot check (no sell tax data available in this API)
-            # Would need additional API calls for full check
-            checks['honeypot_risk'] = False
+                checks['age_ok'] = age_hours < 48
             
             return checks
         except Exception as e:
@@ -133,9 +160,11 @@ async def scan_for_signals(context: ContextTypes.DEFAULT_TYPE):
             return
         
         active_chats = context.bot_data['active_chats']
+        if not active_chats:
+            return  # No one subscribed
         
         # Search for recent Solana tokens
-        search_terms = ['pump', 'raydium', 'orca', 'new', 'solana']
+        search_terms = ['pump', 'raydium', 'orca']
         
         async with aiohttp.ClientSession() as session:
             for term in search_terms:
@@ -149,7 +178,13 @@ async def scan_for_signals(context: ContextTypes.DEFAULT_TYPE):
                             # Filter for Solana
                             solana_pairs = [p for p in pairs if p.get('chainId') == 'solana']
                             
-                            for pair in solana_pairs[:10]:  # Check top 10
+                            for pair in solana_pairs[:15]:  # Check top 15
+                                pair_address = pair.get('pairAddress')
+                                
+                                # Skip if already alerted
+                                if not SmartMoneyTracker.should_alert(pair_address):
+                                    continue
+                                
                                 # Calculate metrics
                                 metrics = SmartMoneyTracker.calculate_metrics(pair)
                                 if not metrics:
@@ -162,6 +197,10 @@ async def scan_for_signals(context: ContextTypes.DEFAULT_TYPE):
                                 
                                 # Perform safety checks
                                 safety = await SmartMoneyTracker.perform_safety_checks(pair)
+                                
+                                # Only alert if passes liquidity check
+                                if not safety['liquidity_ok']:
+                                    continue
                                 
                                 # Format and send alert to all active chats
                                 message = format_signal_alert(pair, tier, metrics, safety)
@@ -177,13 +216,15 @@ async def scan_for_signals(context: ContextTypes.DEFAULT_TYPE):
                                     except Exception as e:
                                         print(f"Error sending to chat {chat_id}: {e}")
                                 
+                                print(f"📢 Alert sent: {tier} - {pair.get('baseToken', {}).get('symbol')}")
+                                
                                 # Don't spam - wait between alerts
-                                await asyncio.sleep(2)
+                                await asyncio.sleep(1)
                 
                 except Exception as e:
                     print(f"Error scanning {term}: {e}")
                 
-                await asyncio.sleep(0.5)  # Rate limiting between searches
+                await asyncio.sleep(0.3)  # Rate limiting between searches
     
     except Exception as e:
         print(f"Error in scan_for_signals: {e}")
@@ -207,7 +248,11 @@ def format_signal_alert(pair, tier, metrics, safety):
     pair_created = pair.get('pairCreatedAt')
     if pair_created:
         age_minutes = (datetime.now().timestamp() - pair_created / 1000) / 60
-        age_str = f"{int(age_minutes)} minutes ago"
+        if age_minutes < 60:
+            age_str = f"{int(age_minutes)} minutes ago"
+        else:
+            age_hours = age_minutes / 60
+            age_str = f"{age_hours:.1f} hours ago"
     else:
         age_str = "Unknown"
     
@@ -219,11 +264,11 @@ def format_signal_alert(pair, tier, metrics, safety):
     message = f"<b>{tier_name}</b>\n\n"
     message += f"<b>🪙 {name} (${symbol})</b>\n\n"
     
-    # Signal metrics
-    message += f"<b>📊 Signal Metrics:</b>\n"
-    message += f"Recent Buys: <b>{metrics['recent_buys']}</b> | "
-    message += f"Vol: <b>${metrics['volume']:,.0f}</b> | "
-    message += f"Avg: <b>${metrics['avg_buy']:.2f}</b>\n\n"
+    # Signal metrics (2-3 min window)
+    message += f"<b>📊 Signal (2-3 min window):</b>\n"
+    message += f"Recent Buys: <b>{metrics['recent_buys']}</b>\n"
+    message += f"Volume: <b>${metrics['volume']:,.0f}</b>\n"
+    message += f"Avg Buy: <b>${metrics['avg_buy']:.2f}</b>\n\n"
     
     # Token info
     message += f"💵 Price: ${price:.10f}\n"
@@ -232,13 +277,13 @@ def format_signal_alert(pair, tier, metrics, safety):
     message += f"⏰ Deployed: {age_str}\n\n"
     
     # Safety checks
-    message += f"<b>🛡️ Safety Checks:</b>\n"
-    message += f"✅ Liquidity: {'PASS' if safety['liquidity_ok'] else '⚠️ LOW'}\n"
-    message += f"✅ Age: {'Fresh' if safety['age_ok'] else 'Older token'}\n\n"
+    message += f"<b>🛡️ Safety:</b>\n"
+    message += f"{'✅' if safety['liquidity_ok'] else '⚠️'} Liquidity: ${liquidity:,.0f}\n"
+    message += f"{'✅' if safety['age_ok'] else '⚠️'} Age: {age_str}\n\n"
     
     # Links
-    message += f"🔗 <a href='{dex_url}'>View on Dexscreener</a>\n"
-    message += f"📍 CA: <code>{pair_address}</code>"
+    message += f"🔗 <a href='{dex_url}'>Dexscreener</a>\n"
+    message += f"📍 <code>{pair_address}</code>"
     
     return message
 
