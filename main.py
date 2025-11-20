@@ -60,7 +60,7 @@ class SmartMoneyTracker:
             
             # Validate with 1h data - token must have sustained activity
             buys_1h = h1.get('buys', 0)
-            if buys_1h < 10:  # Filter out dead tokens
+            if buys_1h < 5:  # Very minimal threshold - just checking for activity
                 return None
             
             # Calculate estimated 2-3 min values
@@ -78,7 +78,7 @@ class SmartMoneyTracker:
             avg_buy = volume_2_3min / recent_buys if recent_buys > 0 else 0
             
             # Additional validation - check if numbers make sense
-            if recent_buys < 1 or volume_2_3min < 100:
+            if recent_buys < 1 or volume_2_3min < 50:
                 return None
             
             return {
@@ -152,16 +152,19 @@ async def scan_for_signals(context: ContextTypes.DEFAULT_TYPE):
     try:
         # Get user chat IDs from context (users who have started the bot)
         if 'active_chats' not in context.bot_data:
+            print("⚠️ No active_chats in bot_data")
             return
         
         active_chats = context.bot_data['active_chats']
         if not active_chats:
-            return  # No one subscribed
+            print("⚠️ No active chats subscribed")
+            return
         
         print(f"\n🔍 Starting scan cycle at {datetime.now().strftime('%H:%M:%S')}")
         
         # Collect all valid signals first
         all_signals = []
+        tokens_checked = 0
         
         # Search for recent Solana tokens
         search_terms = ['pump', 'raydium', 'orca', 'meteora']
@@ -177,26 +180,41 @@ async def scan_for_signals(context: ContextTypes.DEFAULT_TYPE):
                             
                             # Filter for Solana
                             solana_pairs = [p for p in pairs if p.get('chainId') == 'solana']
+                            print(f"  📊 Found {len(solana_pairs)} Solana pairs for '{term}'")
                             
                             for pair in solana_pairs[:20]:  # Check top 20
+                                tokens_checked += 1
                                 pair_address = pair.get('pairAddress')
+                                symbol = pair.get('baseToken', {}).get('symbol', 'Unknown')
                                 
                                 # Skip if already alerted
                                 if pair_address in SmartMoneyTracker.alerted_tokens:
+                                    print(f"  ⏭️ Skipping ${symbol} - already alerted")
                                     continue
                                 
                                 # Calculate metrics
                                 metrics = SmartMoneyTracker.calculate_metrics(pair)
                                 if not metrics:
+                                    print(f"  ❌ ${symbol} - No valid metrics")
                                     continue
+                                
+                                # Log metrics for debugging
+                                print(f"  📈 ${symbol}: {metrics['recent_buys']} buys, ${metrics['volume']:,.0f} vol, ${metrics['avg_buy']:.2f} avg")
                                 
                                 # Determine tier
                                 tier = SmartMoneyTracker.determine_tier(metrics)
                                 if not tier:
-                                    continue  # No signal
+                                    print(f"  ⏭️ ${symbol} - Doesn't meet any tier requirements")
+                                    continue
+                                
+                                print(f"  ✅ ${symbol} - Meets {tier} tier!")
                                 
                                 # Perform safety checks
                                 safety = await SmartMoneyTracker.perform_safety_checks(pair)
+                                
+                                # Log safety checks
+                                liquidity = float(pair.get('liquidity', {}).get('usd', 0))
+                                print(f"     💧 Liquidity: ${liquidity:,.0f} - {'PASS' if safety['liquidity_ok'] else 'FAIL'}")
                                 
                                 # Only include if passes liquidity check
                                 if not safety['liquidity_ok']:
@@ -221,8 +239,12 @@ async def scan_for_signals(context: ContextTypes.DEFAULT_TYPE):
                 
                 except Exception as e:
                     print(f"❌ Error scanning {term}: {e}")
+                    import traceback
+                    traceback.print_exc()
                 
                 await asyncio.sleep(0.2)  # Rate limiting
+        
+        print(f"\n📊 Scan complete: Checked {tokens_checked} tokens, found {len(all_signals)} valid signals")
         
         # Sort by priority (tier) then by volume
         all_signals.sort(key=lambda x: (x['priority'], x['volume']), reverse=True)
