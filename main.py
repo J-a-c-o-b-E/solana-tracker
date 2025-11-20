@@ -1,787 +1,318 @@
 import os
 import asyncio
 import aiohttp
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
-from datetime import datetime, timedelta
+from datetime import datetime
+from telegram import Update
+from telegram.ext import Application, CommandHandler, ContextTypes
 
-# Dexscreener API endpoints
-DEXSCREENER_PAIRS_API = "https://api.dexscreener.com/latest/dex/pairs/solana/"
-DEXSCREENER_LATEST_API = "https://api.dexscreener.com/latest/dex/tokens/"
+# Dexscreener API
+DEXSCREENER_API = "https://api.dexscreener.com/latest/dex/search?q="
 
-class TokenFilter:
-    """Define filter criteria for different token categories"""
+class SmartMoneyTracker:
+    """Tracks volume spikes and buying pressure on Solana tokens"""
     
-    VERY_DEGEN = {
-        'name': 'Very Degen',
-        'min_liquidity': 10000,
-        'max_liquidity': 14900,
-        'min_fdv': 100000,
-        'max_fdv': 1000000,
-        'min_pair_age_hours': 0,
-        'max_pair_age_hours': 48,
-        'min_txns_1h': 30,
-        'max_txns_1h': 99,
+    # Signal strength tiers based on your images
+    TIERS = {
+        'FIRST_CALL': {
+            'name': '🔔 FIRST CALL',
+            'recent_buys': 20,
+            'volume': 3000,
+            'avg_buy': 50,
+        },
+        'MEDIUM': {
+            'name': '💎 MEDIUM',
+            'recent_buys': 30,
+            'volume': 6000,
+            'avg_buy': 75,
+        },
+        'STRONG': {
+            'name': '💎 STRONG',
+            'recent_buys': 45,
+            'volume': 10000,
+            'avg_buy': 100,
+        },
+        'VERY_STRONG': {
+            'name': '💎 VERY STRONG 💎',
+            'recent_buys': 80,
+            'volume': 20000,
+            'avg_buy': 0,  # No minimum
+        },
     }
     
-    DEGEN = {
-        'name': 'Degen',
-        'min_liquidity': 15000,
-        'max_liquidity': 99900,
-        'min_fdv': 100000,
-        'max_fdv': 1000000,
-        'min_pair_age_hours': 1,
-        'max_pair_age_hours': 72,
-        'min_txns_1h': 100,
-        'max_txns_1h': 1000,
-    }
-    
-    MID_CAPS = {
-        'name': 'Mid-Caps',
-        'min_liquidity': 100000,
-        'max_liquidity': 199900,
-        'min_fdv': 1000000,
-        'max_fdv': float('inf'),
-        'min_volume_24h': 1200000,
-        'max_volume_24h': float('inf'),
-        'min_txns_24h': 30,
-        'max_txns_24h': float('inf'),
-    }
-    
-    OLD_MID_CAPS = {
-        'name': 'Old Mid-Caps',
-        'min_liquidity': 100000,
-        'max_liquidity': 199900,
-        'min_fdv': 200000,
-        'max_fdv': 100000000,
-        'min_pair_age_hours': 720,
-        'max_pair_age_hours': 2800,
-        'min_volume_24h': 200000,
-        'max_volume_24h': float('inf'),
-        'min_txns_24h': 2000,
-        'max_txns_24h': float('inf'),
-    }
-    
-    LARGER_MID_CAPS = {
-        'name': 'Larger Mid-Caps',
-        'min_liquidity': 200000,
-        'max_liquidity': float('inf'),
-        'min_mcap': 1000000,
-        'max_mcap': float('inf'),
-        'min_volume_6h': 150000,
-        'max_volume_6h': float('inf'),
-    }
-
-
-async def fetch_solana_tokens(session, limit=2000):
-    """Fetch latest Solana tokens from Dexscreener using multiple endpoints"""
-    all_pairs = []
-    seen_addresses = set()  # Avoid duplicates
-    
-    try:
-        # Method 1: Search by DEXes
-        dexes = ['raydium', 'orca', 'meteora', 'pump', 'jupiter', 'lifinity', 'phoenix', 'openbook']
-        
-        for dex in dexes:
-            try:
-                url = f"https://api.dexscreener.com/latest/dex/search?q={dex}"
-                async with session.get(url) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        pairs = data.get('pairs', [])
-                        for pair in pairs:
-                            pair_address = pair.get('pairAddress')
-                            if (pair.get('chainId') == 'solana' and 
-                                pair.get('liquidity', {}).get('usd', 0) > 0 and
-                                pair_address and pair_address not in seen_addresses):
-                                all_pairs.append(pair)
-                                seen_addresses.add(pair_address)
-                await asyncio.sleep(0.15)
-            except Exception as e:
-                print(f"Error fetching from {dex}: {e}")
-        
-        # Method 2: Search by popular terms and categories
-        search_terms = [
-            'solana', 'meme', 'coin', 'token', 'new', 'ai', 'dao', 'nft',
-            'pepe', 'doge', 'cat', 'dog', 'frog', 'baby', 'moon', 'safe',
-            'elon', 'trump', 'chad', 'wojak', 'bonk', 'inu', 'shib'
-        ]
-        for term in search_terms:
-            try:
-                url = f"https://api.dexscreener.com/latest/dex/search?q={term}"
-                async with session.get(url) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        pairs = data.get('pairs', [])
-                        for pair in pairs:
-                            pair_address = pair.get('pairAddress')
-                            if (pair.get('chainId') == 'solana' and 
-                                pair.get('liquidity', {}).get('usd', 0) > 0 and
-                                pair_address and pair_address not in seen_addresses):
-                                all_pairs.append(pair)
-                                seen_addresses.add(pair_address)
-                await asyncio.sleep(0.15)
-            except Exception as e:
-                print(f"Error fetching for {term}: {e}")
-        
-        # Method 3: Alphabet search for maximum coverage
-        letters = ['a', 'b', 'c', 'd', 'e', 'sol']
-        for letter in letters:
-            try:
-                url = f"https://api.dexscreener.com/latest/dex/search?q={letter}"
-                async with session.get(url) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        pairs = data.get('pairs', [])
-                        for pair in pairs:
-                            pair_address = pair.get('pairAddress')
-                            if (pair.get('chainId') == 'solana' and 
-                                pair.get('liquidity', {}).get('usd', 0) > 0 and
-                                pair_address and pair_address not in seen_addresses):
-                                all_pairs.append(pair)
-                                seen_addresses.add(pair_address)
-                await asyncio.sleep(0.15)
-            except:
-                pass
-        
-        # Method 4: Get trending/boosted tokens
+    @staticmethod
+    def calculate_metrics(pair):
+        """Calculate recent buys, volume, and average buy from pair data"""
         try:
-            url = "https://api.dexscreener.com/token-boosts/top/v1"
-            async with session.get(url) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    for item in data:
-                        if isinstance(item, dict):
-                            pair_address = item.get('pairAddress')
-                            if (item.get('chainId') == 'solana' and
-                                pair_address and pair_address not in seen_addresses):
-                                all_pairs.append(item)
-                                seen_addresses.add(pair_address)
-        except:
-            pass
-                
-        print(f"📊 Total unique pairs fetched: {len(all_pairs)}")
-        
-        if all_pairs:
-            # Sort by most recent first (to catch new gems)
-            all_pairs.sort(key=lambda x: x.get('pairCreatedAt', 0), reverse=True)
+            # Get transaction data
+            txns = pair.get('txns', {})
+            m5 = txns.get('m5', {})  # 5 minute data
+            h1 = txns.get('h1', {})  # 1 hour data
             
-            first = all_pairs[0]
-            print(f"📝 Sample token: {first.get('baseToken', {}).get('symbol')} - "
-                  f"Liq: ${first.get('liquidity', {}).get('usd', 0):,.0f}, "
-                  f"FDV: ${first.get('fdv', 0):,.0f}, "
-                  f"DEX: {first.get('dexId')}")
+            # Recent buys (last 2-3 minutes - use 5min data as proxy)
+            recent_buys = m5.get('buys', 0)
             
-            # Show age range
-            newest_age = calculate_pair_age_hours(all_pairs[0].get('pairCreatedAt'))
-            oldest_age = calculate_pair_age_hours(all_pairs[-1].get('pairCreatedAt'))
-            if newest_age and oldest_age:
-                print(f"📈 Age range: newest={newest_age:.1f}h, oldest={oldest_age:.1f}h")
-        else:
-            print("⚠️ No Solana pairs found")
-        
-        return all_pairs[:limit]
-        
-    except Exception as e:
-        print(f"❌ Error fetching tokens: {e}")
-        import traceback
-        traceback.print_exc()
+            # Volume in last 2-3 minutes
+            volume_5min = float(pair.get('volume', {}).get('m5', 0))
+            
+            # Calculate average buy size
+            avg_buy = volume_5min / recent_buys if recent_buys > 0 else 0
+            
+            return {
+                'recent_buys': recent_buys,
+                'volume': volume_5min,
+                'avg_buy': avg_buy,
+            }
+        except Exception as e:
+            print(f"Error calculating metrics: {e}")
+            return None
     
-    return []
-
-
-def calculate_pair_age_hours(pair_created_at):
-    """Calculate pair age in hours"""
-    try:
-        created_time = datetime.fromtimestamp(pair_created_at / 1000)
-        now = datetime.now()
-        age_hours = (now - created_time).total_seconds() / 3600
-        return age_hours
-    except:
+    @staticmethod
+    def determine_tier(metrics):
+        """Determine signal tier based on metrics"""
+        if not metrics:
+            return None
+        
+        recent_buys = metrics['recent_buys']
+        volume = metrics['volume']
+        avg_buy = metrics['avg_buy']
+        
+        # Check VERY_STRONG first (either 80 buys OR $20k volume)
+        if recent_buys >= 80 or volume >= 20000:
+            return 'VERY_STRONG'
+        
+        # Check STRONG
+        if recent_buys >= 45 and volume >= 10000 and avg_buy >= 100:
+            return 'STRONG'
+        
+        # Check MEDIUM
+        if recent_buys >= 30 and volume >= 6000 and avg_buy >= 75:
+            return 'MEDIUM'
+        
+        # Check FIRST_CALL
+        if recent_buys >= 20 and volume >= 3000 and avg_buy >= 50:
+            return 'FIRST_CALL'
+        
         return None
-
-
-def matches_filter(pair, filter_config):
-    """Check if a pair matches the filter criteria"""
-    try:
-        # Get liquidity
-        liquidity = float(pair.get('liquidity', {}).get('usd', 0))
-        if liquidity < filter_config['min_liquidity'] or liquidity > filter_config.get('max_liquidity', float('inf')):
-            return False
-        
-        # Get FDV (Fully Diluted Valuation)
-        fdv = float(pair.get('fdv', 0))
-        if 'min_fdv' in filter_config:
-            if fdv < filter_config['min_fdv'] or fdv > filter_config.get('max_fdv', float('inf')):
-                return False
-        
-        # Get Market Cap
-        mcap = float(pair.get('marketCap', 0))
-        if 'min_mcap' in filter_config:
-            if mcap < filter_config['min_mcap'] or mcap > filter_config.get('max_mcap', float('inf')):
-                return False
-        
-        # Check pair age
-        if 'min_pair_age_hours' in filter_config:
-            pair_created = pair.get('pairCreatedAt')
-            if pair_created:
-                age_hours = calculate_pair_age_hours(pair_created)
-                if age_hours is None:
-                    return False
-                if age_hours < filter_config['min_pair_age_hours'] or age_hours > filter_config['max_pair_age_hours']:
-                    return False
-        
-        # Check 1H transactions
-        if 'min_txns_1h' in filter_config:
-            txns_1h_buys = pair.get('txns', {}).get('h1', {}).get('buys', 0)
-            txns_1h_sells = pair.get('txns', {}).get('h1', {}).get('sells', 0)
-            txns_1h = txns_1h_buys + txns_1h_sells
-            if txns_1h < filter_config['min_txns_1h'] or txns_1h > filter_config.get('max_txns_1h', float('inf')):
-                return False
-        
-        # Check 24H transactions
-        if 'min_txns_24h' in filter_config:
-            txns_24h_buys = pair.get('txns', {}).get('h24', {}).get('buys', 0)
-            txns_24h_sells = pair.get('txns', {}).get('h24', {}).get('sells', 0)
-            txns_24h = txns_24h_buys + txns_24h_sells
-            if txns_24h < filter_config['min_txns_24h'] or txns_24h > filter_config.get('max_txns_24h', float('inf')):
-                return False
-        
-        # Check 24H volume
-        if 'min_volume_24h' in filter_config:
-            volume_24h = float(pair.get('volume', {}).get('h24', 0))
-            if volume_24h < filter_config['min_volume_24h'] or volume_24h > filter_config.get('max_volume_24h', float('inf')):
-                return False
-        
-        # Check 6H volume
-        if 'min_volume_6h' in filter_config:
-            volume_6h = float(pair.get('volume', {}).get('h6', 0))
-            if volume_6h < filter_config['min_volume_6h'] or volume_6h > filter_config.get('max_volume_6h', float('inf')):
-                return False
-        
-        return True
-    except Exception as e:
-        print(f"Error matching filter: {e}")
-        return False
-
-
-def format_token_message(pair, filter_name=None):
-    """Format token data into a readable message"""
-    try:
-        base_token = pair.get('baseToken', {})
-        
-        name = base_token.get('name', 'Unknown')
-        symbol = base_token.get('symbol', 'Unknown')
-        price_usd = float(pair.get('priceUsd', 0))
-        
-        liquidity = float(pair.get('liquidity', {}).get('usd', 0))
-        fdv = float(pair.get('fdv', 0))
-        mcap = float(pair.get('marketCap', 0))
-        
-        volume_24h = float(pair.get('volume', {}).get('h24', 0))
-        
-        txns_1h = pair.get('txns', {}).get('h1', {})
-        txns_1h_total = txns_1h.get('buys', 0) + txns_1h.get('sells', 0)
-        
-        txns_24h = pair.get('txns', {}).get('h24', {})
-        txns_24h_total = txns_24h.get('buys', 0) + txns_24h.get('sells', 0)
-        
-        pair_created = pair.get('pairCreatedAt')
-        age_hours = calculate_pair_age_hours(pair_created) if pair_created else None
-        
-        price_change_24h = pair.get('priceChange', {}).get('h24', 0)
-        
-        dex_url = pair.get('url', '#')
-        pair_address = pair.get('pairAddress', 'N/A')
-        
-        # Category header based on filter
-        category_headers = {
-            'Very Degen': '<b>🔥VERY DEGEN🔥</b>',
-            'Degen': '<b>💎DEGEN💎</b>',
-            'Mid-Caps': '<b>📈MID-CAPS📈</b>',
-            'Old Mid-Caps': '<b>🏦OLD MID-CAPS🏦</b>',
-            'Larger Mid-Caps': '<b>💰LARGER MID-CAPS💰</b>',
+    
+    @staticmethod
+    async def perform_safety_checks(pair):
+        """Perform basic safety checks on the token"""
+        checks = {
+            'liquidity_ok': False,
+            'age_ok': False,
+            'honeypot_risk': False,
+            'holder_concentration': 'Unknown',
         }
         
-        header = category_headers.get(filter_name, '<b>🔍TOKEN</b>')
+        try:
+            # Check liquidity (should be > $5k)
+            liquidity = float(pair.get('liquidity', {}).get('usd', 0))
+            checks['liquidity_ok'] = liquidity > 5000
+            
+            # Check pair age (prefer tokens deployed in last 24 hours)
+            pair_created = pair.get('pairCreatedAt')
+            if pair_created:
+                age_hours = (datetime.now().timestamp() - pair_created / 1000) / 3600
+                checks['age_ok'] = age_hours < 24
+            
+            # Basic honeypot check (no sell tax data available in this API)
+            # Would need additional API calls for full check
+            checks['honeypot_risk'] = False
+            
+            return checks
+        except Exception as e:
+            print(f"Error in safety checks: {e}")
+            return checks
+
+
+async def scan_for_signals(context: ContextTypes.DEFAULT_TYPE):
+    """Scan Solana tokens for volume spike signals"""
+    try:
+        # Get user chat IDs from context (users who have started the bot)
+        if 'active_chats' not in context.bot_data:
+            return
         
-        message = f"{header}\n\n"
-        message += f"🪙 {name} (${symbol})\n\n"
-        message += f"💵 Price: ${price_usd:.8f}\n"
-        message += f"💧 Liquidity: ${liquidity:,.0f}\n"
-        message += f"📊 FDV: ${fdv:,.0f}\n"
-        message += f"🏦 MCap: ${mcap:,.0f}\n"
-        message += f"📈 24h Volume: ${volume_24h:,.0f}\n"
-        message += f"🔄 24h Change: {price_change_24h:.2f}%\n\n"
+        active_chats = context.bot_data['active_chats']
         
-        if age_hours:
-            message += f"⏱️ Pair Age: {age_hours:.1f} hours\n"
-        message += f"🔥 1H Txns: {txns_1h_total}\n"
-        message += f"🔥 24H Txns: {txns_24h_total}\n\n"
+        # Search for recent Solana tokens
+        search_terms = ['pump', 'raydium', 'orca', 'new', 'solana']
         
-        message += f"🔗 <a href='{dex_url}'>View on Dexscreener</a>\n"
-        message += f"📍 Pair: <code>{pair_address}</code>"
-        
-        return message
+        async with aiohttp.ClientSession() as session:
+            for term in search_terms:
+                try:
+                    url = f"{DEXSCREENER_API}{term}"
+                    async with session.get(url) as response:
+                        if response.status == 200:
+                            data = await response.json()
+                            pairs = data.get('pairs', [])
+                            
+                            # Filter for Solana
+                            solana_pairs = [p for p in pairs if p.get('chainId') == 'solana']
+                            
+                            for pair in solana_pairs[:10]:  # Check top 10
+                                # Calculate metrics
+                                metrics = SmartMoneyTracker.calculate_metrics(pair)
+                                if not metrics:
+                                    continue
+                                
+                                # Determine tier
+                                tier = SmartMoneyTracker.determine_tier(metrics)
+                                if not tier:
+                                    continue  # No signal
+                                
+                                # Perform safety checks
+                                safety = await SmartMoneyTracker.perform_safety_checks(pair)
+                                
+                                # Format and send alert to all active chats
+                                message = format_signal_alert(pair, tier, metrics, safety)
+                                
+                                for chat_id in active_chats:
+                                    try:
+                                        await context.bot.send_message(
+                                            chat_id=chat_id,
+                                            text=message,
+                                            parse_mode='HTML',
+                                            disable_web_page_preview=True
+                                        )
+                                    except Exception as e:
+                                        print(f"Error sending to chat {chat_id}: {e}")
+                                
+                                # Don't spam - wait between alerts
+                                await asyncio.sleep(2)
+                
+                except Exception as e:
+                    print(f"Error scanning {term}: {e}")
+                
+                await asyncio.sleep(0.5)  # Rate limiting between searches
+    
     except Exception as e:
-        print(f"Error formatting message: {e}")
-        return "Error formatting token data"
+        print(f"Error in scan_for_signals: {e}")
+
+
+def format_signal_alert(pair, tier, metrics, safety):
+    """Format the signal alert message"""
+    tier_config = SmartMoneyTracker.TIERS[tier]
+    tier_name = tier_config['name']
+    
+    base_token = pair.get('baseToken', {})
+    name = base_token.get('name', 'Unknown')
+    symbol = base_token.get('symbol', 'Unknown')
+    
+    # Get pair data
+    liquidity = float(pair.get('liquidity', {}).get('usd', 0))
+    mcap = float(pair.get('marketCap', 0))
+    price = float(pair.get('priceUsd', 0))
+    
+    # Get age
+    pair_created = pair.get('pairCreatedAt')
+    if pair_created:
+        age_minutes = (datetime.now().timestamp() - pair_created / 1000) / 60
+        age_str = f"{int(age_minutes)} minutes ago"
+    else:
+        age_str = "Unknown"
+    
+    # DEX links
+    dex_url = pair.get('url', '#')
+    pair_address = pair.get('pairAddress', 'N/A')
+    
+    # Build message
+    message = f"<b>{tier_name}</b>\n\n"
+    message += f"<b>🪙 {name} (${symbol})</b>\n\n"
+    
+    # Signal metrics
+    message += f"<b>📊 Signal Metrics:</b>\n"
+    message += f"Recent Buys: <b>{metrics['recent_buys']}</b> | "
+    message += f"Vol: <b>${metrics['volume']:,.0f}</b> | "
+    message += f"Avg: <b>${metrics['avg_buy']:.2f}</b>\n\n"
+    
+    # Token info
+    message += f"💵 Price: ${price:.10f}\n"
+    message += f"💰 Market Cap: ${mcap:,.0f}\n"
+    message += f"💧 Liquidity: ${liquidity:,.0f}\n"
+    message += f"⏰ Deployed: {age_str}\n\n"
+    
+    # Safety checks
+    message += f"<b>🛡️ Safety Checks:</b>\n"
+    message += f"✅ Liquidity: {'PASS' if safety['liquidity_ok'] else '⚠️ LOW'}\n"
+    message += f"✅ Age: {'Fresh' if safety['age_ok'] else 'Older token'}\n\n"
+    
+    # Links
+    message += f"🔗 <a href='{dex_url}'>View on Dexscreener</a>\n"
+    message += f"📍 CA: <code>{pair_address}</code>"
+    
+    return message
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Start command handler"""
-    from telegram import ReplyKeyboardMarkup, KeyboardButton
+    """Start command - registers user to receive alerts"""
+    chat_id = update.effective_chat.id
     
-    # Create persistent keyboard with 5 buttons at the bottom
-    keyboard = [
-        [KeyboardButton("Very Degen 🔥"), KeyboardButton("Degen 💎")],
-        [KeyboardButton("Mid-Caps 📈"), KeyboardButton("Old Mid-Caps 🏛️")],
-        [KeyboardButton("Larger Mid-Caps 💰")],
-    ]
-    reply_markup = ReplyKeyboardMarkup(
-        keyboard, 
-        resize_keyboard=True,
-        one_time_keyboard=False,
-        input_field_placeholder="Choose a filter..."
-    )
+    # Initialize active chats set if not exists
+    if 'active_chats' not in context.bot_data:
+        context.bot_data['active_chats'] = set()
     
-    welcome_message = (
-        "Welcome to the Memecoin Method Tracker 🔍\n\n"
-        "Find hidden gems on Solana based on our proven filters. "
-        "Select your desired token type below:\n\n"
-        "🔥 Very Degen → 0-48h old, $10K-$15K liquidity\n"
-        "💎 Degen → 1-72h old, high volume\n"
-        "📈 Mid-Caps → Established tokens\n"
-        "🏛️ Old Mid-Caps → Mature projects\n"
-        "💰 Larger Mid-Caps → $200K+ liquidity\n\n"
-        "Tap a button below! 👇"
-    )
+    # Add this chat to active chats
+    context.bot_data['active_chats'].add(chat_id)
     
     await update.message.reply_text(
-        welcome_message,
-        reply_markup=reply_markup
-    )
-
-
-async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle button clicks"""
-    query = update.callback_query
-    await query.answer()
-    
-    filter_map = {
-        'very_degen': TokenFilter.VERY_DEGEN,
-        'degen': TokenFilter.DEGEN,
-        'mid_caps': TokenFilter.MID_CAPS,
-        'old_mid_caps': TokenFilter.OLD_MID_CAPS,
-        'larger_mid_caps': TokenFilter.LARGER_MID_CAPS,
-    }
-    
-    filter_config = filter_map.get(query.data)
-    if not filter_config:
-        await query.message.reply_text("Invalid filter selected.")
-        return
-    
-    searching_msg = await query.message.reply_text(
-        f"🔍 Searching for **{filter_config['name']}** tokens...\n"
-        "This may take a few moments.",
-        parse_mode='Markdown'
+        "🤖 <b>Smart Money Tracker Bot</b>\n\n"
+        "✅ You're now subscribed to real-time alerts!\n\n"
+        "I automatically scan for volume spikes and smart money activity on Solana.\n\n"
+        "<b>Signal Tiers:</b>\n"
+        "🔔 First Call - 20+ buys, $3K+ volume\n"
+        "💎 Medium - 30+ buys, $6K+ volume\n"
+        "💎 Strong - 45+ buys, $10K+ volume\n"
+        "💎 Very Strong - 80+ buys OR $20K+ volume\n\n"
+        "Scanning every 15 seconds...\n\n"
+        "Use /stop to unsubscribe from alerts.",
+        parse_mode='HTML'
     )
     
-    # Get or initialize shown tokens set for this user
-    user_id = update.effective_user.id
-    if 'shown_tokens' not in context.user_data:
-        context.user_data['shown_tokens'] = set()
-    
-    shown_tokens = context.user_data['shown_tokens']
-    
-    # Fetch and filter tokens
-    async with aiohttp.ClientSession() as session:
-        pairs = await fetch_solana_tokens(session, limit=2000)
-        
-        print(f"🔍 Checking {len(pairs)} pairs against {filter_config['name']} filter")
-        
-        # First try to find perfect matches (excluding already shown)
-        perfect_matches = []
-        checked_count = 0
-        
-        for pair in pairs:
-            pair_address = pair.get('pairAddress')
-            # Skip if already shown to this user
-            if pair_address in shown_tokens:
-                continue
-                
-            checked_count += 1
-            if matches_filter(pair, filter_config):
-                perfect_matches.append(pair)
-                print(f"✅ Perfect match found: {pair.get('baseToken', {}).get('symbol')}")
-                break  # Stop after finding 1 perfect match
-        
-        print(f"📊 Checked {checked_count} pairs, found {len(perfect_matches)} perfect matches")
-        
-        # If no perfect match, find the BEST token that's closest to criteria
-        if not perfect_matches:
-            print("⚠️ No perfect match, finding best alternative...")
-            
-            # Score all tokens and pick the best one (excluding already shown)
-            scored_pairs = []
-            for pair in pairs:
-                pair_address = pair.get('pairAddress')
-                # Skip if already shown to this user
-                if pair_address in shown_tokens:
-                    continue
-                    
-                score = 0
-                liquidity = float(pair.get('liquidity', {}).get('usd', 0))
-                fdv = float(pair.get('fdv', 0))
-                
-                # Skip tokens with no data
-                if liquidity < 1000:
-                    continue
-                
-                # Score based on how close to target liquidity range
-                target_liq_min = filter_config.get('min_liquidity', 0)
-                target_liq_max = filter_config.get('max_liquidity', float('inf'))
-                
-                if target_liq_min <= liquidity <= target_liq_max:
-                    score += 100  # Perfect liquidity range
-                else:
-                    # Calculate distance from range
-                    if liquidity < target_liq_min:
-                        diff_pct = abs(liquidity - target_liq_min) / target_liq_min
-                    else:
-                        diff_pct = abs(liquidity - target_liq_max) / target_liq_max
-                    score += max(0, 50 - diff_pct * 50)
-                
-                # Score FDV if applicable
-                if 'min_fdv' in filter_config:
-                    target_fdv_min = filter_config.get('min_fdv', 0)
-                    target_fdv_max = filter_config.get('max_fdv', float('inf'))
-                    if target_fdv_min <= fdv <= target_fdv_max:
-                        score += 50
-                
-                # Score age if applicable
-                if 'min_pair_age_hours' in filter_config:
-                    pair_created = pair.get('pairCreatedAt')
-                    if pair_created:
-                        age_hours = calculate_pair_age_hours(pair_created)
-                        if age_hours:
-                            target_age_min = filter_config.get('min_pair_age_hours', 0)
-                            target_age_max = filter_config.get('max_pair_age_hours', float('inf'))
-                            if target_age_min <= age_hours <= target_age_max:
-                                score += 50
-                
-                # Score transactions if applicable
-                if 'min_txns_1h' in filter_config:
-                    txns_1h = pair.get('txns', {}).get('h1', {})
-                    txns_total = txns_1h.get('buys', 0) + txns_1h.get('sells', 0)
-                    target_min = filter_config.get('min_txns_1h', 0)
-                    if txns_total >= target_min:
-                        score += 30
-                
-                if score > 0:
-                    scored_pairs.append((score, pair))
-            
-            # Sort by score and pick the best
-            scored_pairs.sort(reverse=True, key=lambda x: x[0])
-            
-            if scored_pairs:
-                best_score, best_pair = scored_pairs[0]
-                perfect_matches = [best_pair]
-                print(f"✅ Best alternative found (score: {best_score:.0f}): {best_pair.get('baseToken', {}).get('symbol')}")
-            else:
-                # Last resort: just pick the first token with good liquidity (not already shown)
-                for pair in pairs:
-                    pair_address = pair.get('pairAddress')
-                    if pair_address not in shown_tokens and float(pair.get('liquidity', {}).get('usd', 0)) > 5000:
-                        perfect_matches = [pair]
-                        print(f"✅ Fallback token: {pair.get('baseToken', {}).get('symbol')}")
-                        break
-        
-        # Send the token (we WILL have one at this point)
-        if perfect_matches:
-            pair = perfect_matches[0]
-            pair_address = pair.get('pairAddress')
-            
-            # Mark this token as shown to this user
-            shown_tokens.add(pair_address)
-            
-            # Keep only last 50 shown tokens to avoid memory issues
-            if len(shown_tokens) > 50:
-                shown_tokens.pop()
-            
-            # Delete the searching message
-            try:
-                await searching_msg.delete()
-            except:
-                pass
-            
-            message = format_token_message(pair, filter_config['name'])
-            await query.message.reply_text(message, parse_mode='HTML', disable_web_page_preview=True)
-        else:
-            # This should never happen now, but just in case
-            await query.message.reply_text(
-                f"❌ Unable to find any tokens. Please try again in a moment.",
-                parse_mode='Markdown'
-            )
+    print(f"✅ Chat {chat_id} subscribed to alerts")
 
 
-async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle text messages from keyboard buttons"""
-    text = update.message.text
+async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Stop command - unsubscribes user from alerts"""
+    chat_id = update.effective_chat.id
     
-    # Map button text to filter
-    filter_map = {
-        'Very Degen 🔥': TokenFilter.VERY_DEGEN,
-        'Degen 💎': TokenFilter.DEGEN,
-        'Mid-Caps 📈': TokenFilter.MID_CAPS,
-        'Old Mid-Caps 🏛️': TokenFilter.OLD_MID_CAPS,
-        'Larger Mid-Caps 💰': TokenFilter.LARGER_MID_CAPS,
-    }
-    
-    filter_config = filter_map.get(text)
-    
-    if not filter_config:
-        # Unknown text - ignore
-        return
-    
-    searching_msg = await update.message.reply_text(
-        f"🔍 Searching for **{filter_config['name']}** tokens...\n"
-        "This may take a few moments.",
-        parse_mode='Markdown'
-    )
-    
-    # Get or initialize shown tokens set for this user
-    user_id = update.effective_user.id
-    if 'shown_tokens' not in context.user_data:
-        context.user_data['shown_tokens'] = set()
-    
-    shown_tokens = context.user_data['shown_tokens']
-    
-    # Fetch and filter tokens
-    async with aiohttp.ClientSession() as session:
-        pairs = await fetch_solana_tokens(session, limit=2000)
-        
-        print(f"🔍 Checking {len(pairs)} pairs against {filter_config['name']} filter")
-        
-        # First try to find perfect matches (excluding already shown)
-        perfect_matches = []
-        checked_count = 0
-        
-        for pair in pairs:
-            pair_address = pair.get('pairAddress')
-            # Skip if already shown to this user
-            if pair_address in shown_tokens:
-                continue
-                
-            checked_count += 1
-            if matches_filter(pair, filter_config):
-                perfect_matches.append(pair)
-                print(f"✅ Perfect match found: {pair.get('baseToken', {}).get('symbol')}")
-                break  # Stop after finding 1 perfect match
-        
-        print(f"📊 Checked {checked_count} pairs, found {len(perfect_matches)} perfect matches")
-        
-        # If no perfect match, find the BEST token that's closest to criteria
-        if not perfect_matches:
-            print("⚠️ No perfect match, finding best alternative...")
-            
-            # Score all tokens and pick the best one (excluding already shown)
-            scored_pairs = []
-            for pair in pairs:
-                pair_address = pair.get('pairAddress')
-                # Skip if already shown to this user
-                if pair_address in shown_tokens:
-                    continue
-                    
-                score = 0
-                liquidity = float(pair.get('liquidity', {}).get('usd', 0))
-                fdv = float(pair.get('fdv', 0))
-                
-                # Skip tokens with no data
-                if liquidity < 1000:
-                    continue
-                
-                # Score based on how close to target liquidity range
-                target_liq_min = filter_config.get('min_liquidity', 0)
-                target_liq_max = filter_config.get('max_liquidity', float('inf'))
-                
-                if target_liq_min <= liquidity <= target_liq_max:
-                    score += 100  # Perfect liquidity range
-                else:
-                    # Calculate distance from range
-                    if liquidity < target_liq_min:
-                        diff_pct = abs(liquidity - target_liq_min) / target_liq_min
-                    else:
-                        diff_pct = abs(liquidity - target_liq_max) / target_liq_max
-                    score += max(0, 50 - diff_pct * 50)
-                
-                # Score FDV if applicable
-                if 'min_fdv' in filter_config:
-                    target_fdv_min = filter_config.get('min_fdv', 0)
-                    target_fdv_max = filter_config.get('max_fdv', float('inf'))
-                    if target_fdv_min <= fdv <= target_fdv_max:
-                        score += 50
-                
-                # Score age if applicable
-                if 'min_pair_age_hours' in filter_config:
-                    pair_created = pair.get('pairCreatedAt')
-                    if pair_created:
-                        age_hours = calculate_pair_age_hours(pair_created)
-                        if age_hours:
-                            target_age_min = filter_config.get('min_pair_age_hours', 0)
-                            target_age_max = filter_config.get('max_pair_age_hours', float('inf'))
-                            if target_age_min <= age_hours <= target_age_max:
-                                score += 50
-                
-                # Score transactions if applicable
-                if 'min_txns_1h' in filter_config:
-                    txns_1h = pair.get('txns', {}).get('h1', {})
-                    txns_total = txns_1h.get('buys', 0) + txns_1h.get('sells', 0)
-                    target_min = filter_config.get('min_txns_1h', 0)
-                    if txns_total >= target_min:
-                        score += 30
-                
-                if score > 0:
-                    scored_pairs.append((score, pair))
-            
-            # Sort by score and pick the best
-            scored_pairs.sort(reverse=True, key=lambda x: x[0])
-            
-            if scored_pairs:
-                best_score, best_pair = scored_pairs[0]
-                perfect_matches = [best_pair]
-                print(f"✅ Best alternative found (score: {best_score:.0f}): {best_pair.get('baseToken', {}).get('symbol')}")
-            else:
-                # Last resort: just pick the first token with good liquidity (not already shown)
-                for pair in pairs:
-                    pair_address = pair.get('pairAddress')
-                    if pair_address not in shown_tokens and float(pair.get('liquidity', {}).get('usd', 0)) > 5000:
-                        perfect_matches = [pair]
-                        print(f"✅ Fallback token: {pair.get('baseToken', {}).get('symbol')}")
-                        break
-        
-        # Send the token (we WILL have one at this point)
-        if perfect_matches:
-            pair = perfect_matches[0]
-            pair_address = pair.get('pairAddress')
-            
-            # Mark this token as shown to this user
-            shown_tokens.add(pair_address)
-            
-            # Keep only last 50 shown tokens to avoid memory issues
-            if len(shown_tokens) > 50:
-                shown_tokens.pop()
-            
-            # Delete the searching message
-            try:
-                await searching_msg.delete()
-            except:
-                pass
-            
-            message = format_token_message(pair, filter_config['name'])
-            await update.message.reply_text(message, parse_mode='HTML', disable_web_page_preview=True)
-        else:
-            # This should never happen now, but just in case
-            await update.message.reply_text(
-                f"❌ Unable to find any tokens. Please try again in a moment.",
-                parse_mode='Markdown'
-            )
-
-
-async def scan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Manual scan command for groups"""
-    keyboard = [
-        [
-            InlineKeyboardButton("Very Degen 🔥", callback_data='very_degen'),
-            InlineKeyboardButton("Degen 💎", callback_data='degen'),
-        ],
-        [
-            InlineKeyboardButton("Mid-Caps 📈", callback_data='mid_caps'),
-            InlineKeyboardButton("Old Mid-Caps 🏛️", callback_data='old_mid_caps'),
-        ],
-        [
-            InlineKeyboardButton("Larger Mid-Caps 💰", callback_data='larger_mid_caps'),
-        ],
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
+    if 'active_chats' in context.bot_data:
+        context.bot_data['active_chats'].discard(chat_id)
     
     await update.message.reply_text(
-        "🔍 **Select a filter to scan Solana tokens:**",
-        reply_markup=reply_markup,
-        parse_mode='Markdown'
+        "🛑 <b>Alerts Stopped</b>\n\n"
+        "You've been unsubscribed from alerts.\n\n"
+        "Use /start to subscribe again.",
+        parse_mode='HTML'
     )
-
-
-async def auto_scan(context: ContextTypes.DEFAULT_TYPE):
-    """Automatic scan job that runs periodically"""
-    try:
-        # Get the group chat ID from environment or use default
-        group_chat_id = os.environ.get('TELEGRAM_GROUP_ID', '3229530404')
-        
-        # Convert to negative ID for groups (Telegram API requirement)
-        if not group_chat_id.startswith('-'):
-            group_chat_id = f'-{group_chat_id}'
-        
-        # Scan with Very Degen filter (most aggressive for new gems)
-        async with aiohttp.ClientSession() as session:
-            pairs = await fetch_solana_tokens(session, limit=2000)
-            
-            matching_pairs = []
-            for pair in pairs:
-                if matches_filter(pair, TokenFilter.VERY_DEGEN):
-                    matching_pairs.append(pair)
-                    break  # Only get 1 token
-            
-            if matching_pairs:
-                pair = matching_pairs[0]
-                message = format_token_message(pair, 'Very Degen')
-                await context.bot.send_message(
-                    chat_id=group_chat_id,
-                    text=f"🔥 **Auto Scan Alert - Very Degen Gem Found!**\n\n{message}",
-                    parse_mode='Markdown',
-                    disable_web_page_preview=True
-                )
-    except Exception as e:
-        print(f"Error in auto_scan: {e}")
+    
+    print(f"❌ Chat {chat_id} unsubscribed from alerts")
 
 
 def main():
-    """Main function to run the bot"""
-    # Get bot token from environment variable
+    """Main function"""
     bot_token = os.environ.get('TELEGRAM_BOT_TOKEN')
     
     if not bot_token:
         print("❌ Error: TELEGRAM_BOT_TOKEN environment variable not set!")
-        print("\nTo set it:")
-        print("  export TELEGRAM_BOT_TOKEN='your_token_here'")
         return
     
     print(f"🤖 Bot Token: {bot_token[:10]}...{bot_token[-5:]}")
-    
-    # Get group ID
-    group_id = os.environ.get('TELEGRAM_GROUP_ID', '3229530404')
-    print(f"📢 Group ID: {group_id}")
     
     # Create application
     application = Application.builder().token(bot_token).build()
     
     # Add handlers
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("scan", scan_command))
-    application.add_handler(CallbackQueryHandler(button_callback))
+    application.add_handler(CommandHandler("stop", stop))
     
-    # Handle all other text messages - just show buttons
-    from telegram.ext import MessageHandler, filters
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-    
-    # Add auto-scan job (runs every 30 minutes)
+    # Add scanning job (every 15 seconds)
     job_queue = application.job_queue
-    job_queue.run_repeating(auto_scan, interval=1800, first=10)  # 1800 seconds = 30 minutes
+    job_queue.run_repeating(scan_for_signals, interval=15, first=10)
     
     # Start the bot
-    print("🤖 Bot is starting...")
-    print("🔄 Auto-scan enabled: Every 30 minutes")
-    print("💎 Ready to find Solana gems!")
+    print("🤖 Smart Money Tracker starting...")
+    print("🔍 Scanning for volume spikes every 15 seconds")
+    print("💬 Alerts will be sent to users who /start the bot")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
