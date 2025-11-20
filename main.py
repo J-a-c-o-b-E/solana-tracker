@@ -135,11 +135,11 @@ class SmartMoneyTracker:
             liquidity = float(pair.get('liquidity', {}).get('usd', 0))
             checks['liquidity_ok'] = liquidity > 5000
             
-            # Check pair age (prefer tokens deployed in last 48 hours)
+            # Check pair age (accept tokens deployed in last 240 hours = 10 days)
             pair_created = pair.get('pairCreatedAt')
             if pair_created:
                 age_hours = (datetime.now().timestamp() - pair_created / 1000) / 3600
-                checks['age_ok'] = age_hours < 48
+                checks['age_ok'] = age_hours < 240
             
             return checks
         except Exception as e:
@@ -308,46 +308,61 @@ def format_signal_alert(pair, tier, metrics, safety):
     mcap = float(pair.get('marketCap', 0))
     price = float(pair.get('priceUsd', 0))
     
+    # Get transaction data
+    txns_5min = pair.get('txns', {}).get('m5', {})
+    txns_1h = pair.get('txns', {}).get('h1', {})
+    buys_5min = txns_5min.get('buys', 0)
+    sells_5min = txns_5min.get('sells', 0)
+    
     # Get age
     pair_created = pair.get('pairCreatedAt')
     if pair_created:
         age_minutes = (datetime.now().timestamp() - pair_created / 1000) / 60
         if age_minutes < 60:
             age_str = f"{int(age_minutes)} minutes ago"
-        else:
+        elif age_minutes < 1440:  # Less than 24 hours
             age_hours = age_minutes / 60
             age_str = f"{age_hours:.1f} hours ago"
+        else:
+            age_days = age_minutes / 1440
+            age_str = f"{age_days:.1f} days ago"
     else:
         age_str = "Unknown"
+    
+    # Determine if Fourmeme/known origin (we don't have this data, so skip)
+    # Get quote token
+    quote_token = pair.get('quoteToken', {})
+    quote_symbol = quote_token.get('symbol', 'USD')
     
     # DEX links
     dex_url = pair.get('url', '#')
     pair_address = pair.get('pairAddress', 'N/A')
+    base_address = base_token.get('address', 'N/A')
     
     # Build message
     message = f"<b>{tier_name}</b>\n\n"
-    message += f"<b>🪙 {name} (${symbol})</b>\n\n"
     
-    # Signal metrics (2-3 min window)
-    message += f"<b>📊 Signal (2-3 min window):</b>\n"
-    message += f"Recent Buys: <b>{metrics['recent_buys']}</b>\n"
-    message += f"Volume: <b>${metrics['volume']:,.0f}</b>\n"
-    message += f"Avg Buy: <b>${metrics['avg_buy']:.2f}</b>\n\n"
+    # Recent buys info
+    message += f"Recent buys: <b>{metrics['recent_buys']}</b> | "
+    message += f"Vol: <b>{metrics['volume']:,.2f} {quote_symbol}</b> | "
+    message += f"Average: <b>{metrics['avg_buy']:.2f}</b>\n"
+    message += f"FR: <b>{buys_5min}</b> | TR: <b>{buys_5min + sells_5min}</b>\n\n"
     
-    # Token info
-    message += f"💵 Price: ${price:.10f}\n"
-    message += f"💰 Market Cap: ${mcap:,.0f}\n"
-    message += f"💧 Liquidity: ${liquidity:,.0f}\n"
-    message += f"⏰ Deployed: {age_str}\n\n"
-    
-    # Safety checks
-    message += f"<b>🛡️ Safety:</b>\n"
-    message += f"{'✅' if safety['liquidity_ok'] else '⚠️'} Liquidity: ${liquidity:,.0f}\n"
-    message += f"{'✅' if safety['age_ok'] else '⚠️'} Age: {age_str}\n\n"
+    # Market cap
+    message += f"💰 Market cap: <b>{mcap:,.0f} $</b>\n"
     
     # Links
-    message += f"🔗 <a href='{dex_url}'>Dexscreener</a>\n"
-    message += f"📍 <code>{pair_address}</code>"
+    message += f"<a href='{dex_url}'>DexScreener</a>\n"
+    
+    # Contract address
+    message += f"CA: <code>{base_address}</code>\n\n"
+    
+    # Additional info
+    message += f"💧 Liquidity: <b>${liquidity:,.0f}</b>\n"
+    message += f"💵 Price: <b>${price:.10f}</b>\n\n"
+    
+    # Deployed time
+    message += f"⏰ Token deployed: <b>{age_str}</b>"
     
     return message
 
