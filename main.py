@@ -342,6 +342,9 @@ def format_signal_alert(pair, tier, metrics, safety):
     # Build message
     message = f"<b>{tier_name}</b>\n\n"
     
+    # Token name
+    message += f"<b>{name} (${symbol})</b>\n\n"
+    
     # Recent buys info
     message += f"Recent buys: <b>{metrics['recent_buys']}</b> | "
     message += f"Vol: <b>{metrics['volume']:,.2f} {quote_symbol}</b> | "
