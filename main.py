@@ -214,10 +214,19 @@ async def scan_for_signals(context: ContextTypes.DEFAULT_TYPE):
                                 
                                 # Log safety checks
                                 liquidity = float(pair.get('liquidity', {}).get('usd', 0))
+                                pair_created = pair.get('pairCreatedAt')
+                                if pair_created:
+                                    age_hours = (datetime.now().timestamp() - pair_created / 1000) / 3600
+                                    print(f"     ⏰ Age: {age_hours:.1f}h - {'PASS' if safety['age_ok'] else 'FAIL (>10 days)'}")
                                 print(f"     💧 Liquidity: ${liquidity:,.0f} - {'PASS' if safety['liquidity_ok'] else 'FAIL'}")
                                 
-                                # Only include if passes liquidity check
+                                # Only include if passes BOTH liquidity AND age checks
                                 if not safety['liquidity_ok']:
+                                    print(f"     ❌ Skipping - Low liquidity")
+                                    continue
+                                
+                                if not safety['age_ok']:
+                                    print(f"     ❌ Skipping - Too old (>10 days)")
                                     continue
                                 
                                 # Add to valid signals with tier priority
