@@ -14,6 +14,9 @@ class SmartMoneyTracker:
     # Track tokens we've already alerted on
     alerted_tokens = set()
     
+    # Track all calls with their initial price for performance tracking
+    call_history = []  # List of dicts: {token_address, symbol, initial_price, call_time, tier}
+    
     # Signal strength tiers based on your images
     TIERS = {
         'FIRST_CALL': {
@@ -270,6 +273,21 @@ async def scan_for_signals(context: ContextTypes.DEFAULT_TYPE):
             # Mark as alerted
             SmartMoneyTracker.alerted_tokens.add(pair_address)
             
+            # Track this call for performance analysis
+            SmartMoneyTracker.call_history.append({
+                'token_address': best_signal['pair'].get('baseToken', {}).get('address'),
+                'pair_address': pair_address,
+                'symbol': best_signal['pair'].get('baseToken', {}).get('symbol'),
+                'name': best_signal['pair'].get('baseToken', {}).get('name'),
+                'initial_price': float(best_signal['pair'].get('priceUsd', 0)),
+                'call_time': datetime.now(),
+                'tier': tier,
+            })
+            
+            # Keep only last 50 calls for performance tracking
+            if len(SmartMoneyTracker.call_history) > 50:
+                SmartMoneyTracker.call_history.pop(0)
+            
             # Keep only last 100 tokens
             if len(SmartMoneyTracker.alerted_tokens) > 100:
                 # Convert to list, remove first, convert back
@@ -400,7 +418,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "💎 Strong - 45+ buys, $10K+ volume\n"
         "💎 Very Strong - 80+ buys OR $20K+ volume\n\n"
         "Scanning every 15 seconds...\n\n"
-        "Use /stop to unsubscribe from alerts.",
+        "<b>Commands:</b>\n"
+        "/stats - Check call performance\n"
+        "/stop - Unsubscribe from alerts",
         parse_mode='HTML'
     )
     
@@ -424,6 +444,200 @@ async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     print(f"❌ Chat {chat_id} unsubscribed from alerts")
 
 
+async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Stats command - analyzes call performance"""
+    await update.message.reply_text("📊 Analyzing call performance...", parse_mode='HTML')
+    
+    call_history = SmartMoneyTracker.call_history
+    
+    if not call_history:
+        await update.message.reply_text(
+            "📊 <b>No Calls Yet</b>\n\n"
+            "No calls have been made yet. Wait for the bot to detect signals!",
+            parse_mode='HTML'
+        )
+        return
+    
+    # Fetch current prices for all called tokens
+    results = []
+    
+    async with aiohttp.ClientSession() as session:
+        for call in call_history:
+            token_address = call.get('token_address')
+            pair_address = call.get('pair_address')
+            
+            if not pair_address:
+                continue
+            
+            try:
+                # Fetch current data from Dexscreener
+                url = f"https://api.dexscreener.com/latest/dex/pairs/solana/{pair_address}"
+                async with session.get(url) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        if data and 'pair' in data:
+                            current_price = float(data['pair'].get('priceUsd', 0))
+                            
+                            if current_price > 0 and call['initial_price'] > 0:
+                                # Calculate % gain
+                                gain_pct = ((current_price - call['initial_price']) / call['initial_price']) * 100
+                                
+                                results.append({
+                                    'symbol': call['symbol'],
+                                    'name': call['name'],
+                                    'tier': call['tier'],
+                                    'initial_price': call['initial_price'],
+                                    'current_price': current_price,
+                                    'gain_pct': gain_pct,
+                                    'call_time': call['call_time'],
+                                })
+                
+                await asyncio.sleep(0.3)  # Rate limiting
+                
+            except Exception as e:
+                print(f"Error fetching price for {call['symbol']}: {e}")
+    
+    if not results:
+        await update.message.reply_text(
+            "❌ <b>Unable to Fetch Prices</b>\n\n"
+            "Couldn't retrieve current prices for called tokens.",
+            parse_mode='HTML'
+        )
+        return
+    
+    # Sort by highest gain
+    results.sort(key=lambda x: x['gain_pct'], reverse=True)
+    
+    # Calculate average
+    avg_gain = sum(r['gain_pct'] for r in results) / len(results) if results else 0
+    
+    # Build message
+    message = "<b>📊 CALL PERFORMANCE STATS</b>\n\n"
+    message += f"Total Calls: <b>{len(results)}</b>\n"
+    message += f"Average Gain: <b>{avg_gain:+.2f}%</b>\n\n"
+    message += "<b>Top Performers:</b>\n\n"
+    
+    # Show top 10
+    for i, result in enumerate(results[:10], 1):
+        elapsed = datetime.now() - result['call_time']
+        hours = elapsed.total_seconds() / 3600
+        
+        emoji = "🟢" if result['gain_pct'] > 0 else "🔴"
+        
+        message += f"{i}. {emoji} <b>{result['symbol']}</b>\n"
+        message += f"   Tier: {result['tier']}\n"
+        message += f"   Max Gain: <b>{result['gain_pct']:+.2f}%</b>\n"
+        message += f"   Time: {hours:.1f}h ago\n\n"
+    
+    await update.message.reply_text(message, parse_mode='HTML')
+
+
+async def performance(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Check performance of all calls made"""
+    await update.message.reply_text(
+        "📊 Analyzing call performance...\n"
+        "Fetching current prices from Dexscreener...",
+        parse_mode='HTML'
+    )
+    
+    if not SmartMoneyTracker.call_history:
+        await update.message.reply_text(
+            "❌ No calls have been made yet!\n\n"
+            "Start the bot with /start to receive signals.",
+            parse_mode='HTML'
+        )
+        return
+    
+    # Fetch current prices for all tracked calls
+    results = []
+    
+    async with aiohttp.ClientSession() as session:
+        for call in SmartMoneyTracker.call_history:
+            try:
+                token_address = call['token_address']
+                
+                # Fetch current data from Dexscreener
+                url = f"https://api.dexscreener.com/latest/dex/tokens/{token_address}"
+                async with session.get(url) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        pairs = data.get('pairs', [])
+                        
+                        if pairs:
+                            # Get Solana pair
+                            solana_pair = next((p for p in pairs if p.get('chainId') == 'solana'), None)
+                            
+                            if solana_pair:
+                                current_price = float(solana_pair.get('priceUsd', 0))
+                                initial_price = call['initial_price']
+                                
+                                if initial_price > 0:
+                                    price_change = ((current_price - initial_price) / initial_price) * 100
+                                    
+                                    # Calculate time since call
+                                    time_diff = datetime.now() - call['call_time']
+                                    hours = time_diff.total_seconds() / 3600
+                                    
+                                    results.append({
+                                        'symbol': call['symbol'],
+                                        'name': call['name'],
+                                        'tier': call['tier'],
+                                        'price_change': price_change,
+                                        'hours_ago': hours,
+                                        'initial_price': initial_price,
+                                        'current_price': current_price,
+                                    })
+                
+                await asyncio.sleep(0.3)  # Rate limiting
+            
+            except Exception as e:
+                print(f"Error fetching price for {call['symbol']}: {e}")
+    
+    if not results:
+        await update.message.reply_text(
+            "❌ Could not fetch current prices for tracked calls.",
+            parse_mode='HTML'
+        )
+        return
+    
+    # Sort by price change (best to worst)
+    results.sort(key=lambda x: x['price_change'], reverse=True)
+    
+    # Calculate statistics
+    total_calls = len(results)
+    profitable_calls = len([r for r in results if r['price_change'] > 0])
+    avg_gain = sum(r['price_change'] for r in results) / total_calls
+    max_gain = max(r['price_change'] for r in results)
+    max_loss = min(r['price_change'] for r in results)
+    
+    # Build message
+    message = "<b>📊 CALL PERFORMANCE REPORT</b>\n\n"
+    message += f"<b>Statistics:</b>\n"
+    message += f"Total Calls: <b>{total_calls}</b>\n"
+    message += f"Profitable: <b>{profitable_calls}/{total_calls}</b> ({(profitable_calls/total_calls*100):.1f}%)\n"
+    message += f"Avg Change: <b>{avg_gain:+.2f}%</b>\n"
+    message += f"Best: <b>{max_gain:+.2f}%</b>\n"
+    message += f"Worst: <b>{max_loss:+.2f}%</b>\n\n"
+    
+    message += "<b>Recent Calls:</b>\n"
+    
+    # Show top 10 calls
+    for i, result in enumerate(results[:10], 1):
+        emoji = "🟢" if result['price_change'] > 0 else "🔴"
+        message += f"\n{i}. {emoji} <b>{result['symbol']}</b>\n"
+        message += f"   {result['tier']}\n"
+        message += f"   Change: <b>{result['price_change']:+.2f}%</b>\n"
+        message += f"   Called: {result['hours_ago']:.1f}h ago\n"
+        message += f"   ${result['initial_price']:.8f} → ${result['current_price']:.8f}\n"
+    
+    if len(results) > 10:
+        message += f"\n<i>... and {len(results) - 10} more calls</i>"
+    
+    await update.message.reply_text(message, parse_mode='HTML')
+    
+    print(f"📊 Performance report sent to user")
+
+
 def main():
     """Main function"""
     bot_token = os.environ.get('TELEGRAM_BOT_TOKEN')
@@ -440,6 +654,9 @@ def main():
     # Add handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("stop", stop))
+    application.add_handler(CommandHandler("stats", stats))
+    application.add_handler(CommandHandler("performance", performance))
+    application.add_handler(CommandHandler("stats", performance))  # Alias
     
     # Add scanning job (every 15 seconds)
     job_queue = application.job_queue
