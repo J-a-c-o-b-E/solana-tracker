@@ -613,16 +613,25 @@ async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Stats command - shows ALL call performance from database"""
-    await update.message.reply_text("📊 Loading call history from database...", parse_mode='HTML')
+    
+    # Delete previous stats message if exists
+    if 'last_stats_message' in context.user_data:
+        try:
+            await context.user_data['last_stats_message'].delete()
+        except:
+            pass  # Message might already be deleted
+    
+    loading_msg = await update.message.reply_text("📊 Loading call history from database...", parse_mode='HTML')
     
     all_calls = get_all_calls()
     
     if not all_calls:
-        await update.message.reply_text(
+        await loading_msg.edit_text(
             "📊 <b>No Calls Yet</b>\n\n"
             "No calls have been made yet. Wait for the bot to detect signals!",
             parse_mode='HTML'
         )
+        context.user_data['last_stats_message'] = loading_msg
         return
     
     # Calculate gains using peak prices
@@ -647,11 +656,12 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
             })
     
     if not results:
-        await update.message.reply_text(
+        await loading_msg.edit_text(
             "❌ <b>No Valid Data</b>\n\n"
             "No price data available for tracked calls.",
             parse_mode='HTML'
         )
+        context.user_data['last_stats_message'] = loading_msg
         return
     
     # Sort by highest gain
@@ -692,7 +702,12 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         message += f"{i}. {emoji} <b>{result['symbol']}</b> - {result['tier']}\n"
         message += f"   Max: <b>{result['max_gain_pct']:+.2f}%</b> | {time_str}\n\n"
     
-    await update.message.reply_text(message, parse_mode='HTML')
+    # Delete loading message and send final stats
+    await loading_msg.delete()
+    stats_msg = await update.message.reply_text(message, parse_mode='HTML')
+    
+    # Store this message to delete it next time
+    context.user_data['last_stats_message'] = stats_msg
 
 
 async def performance(update: Update, context: ContextTypes.DEFAULT_TYPE):
