@@ -10,7 +10,9 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 DEXSCREENER_API = "https://api.dexscreener.com/latest/dex/search?q="
 
 # Database setup
-DB_FILE = 'call_history.db'
+# Use persistent storage if available (/data on Render), otherwise local
+DATA_DIR = '/data' if os.path.exists('/data') else '.'
+DB_FILE = os.path.join(DATA_DIR, 'call_history.db')
 
 def init_database():
     """Initialize SQLite database for persistent call tracking"""
@@ -39,7 +41,14 @@ def init_database():
     
     conn.commit()
     conn.close()
-    print("✅ Database initialized")
+    print(f"✅ Database initialized at: {DB_FILE}")
+    
+    # Check if persistent storage
+    if '/data' in DB_FILE:
+        print("💾 Using PERSISTENT storage - data survives redeployments!")
+    else:
+        print("⚠️ Using LOCAL storage - data will be lost on redeploy")
+        print("   To fix: Add persistent disk mounted at /data on Render")
 
 
 def was_recently_called(pair_address, hours=24):
@@ -567,6 +576,19 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start command - registers user to receive alerts"""
     chat_id = update.effective_chat.id
     
+    # Delete the user's /start command
+    try:
+        await update.message.delete()
+    except:
+        pass
+    
+    # Delete previous start message if exists
+    if 'last_start_message' in context.user_data:
+        try:
+            await context.user_data['last_start_message'].delete()
+        except:
+            pass
+    
     # Initialize active chats set if not exists
     if 'active_chats' not in context.bot_data:
         context.bot_data['active_chats'] = set()
@@ -574,8 +596,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Add this chat to active chats
     context.bot_data['active_chats'].add(chat_id)
     
-    await update.message.reply_text(
-        "🤖 <b>Smart Money Tracker Bot</b>\n\n"
+    start_msg = await context.bot.send_message(
+        chat_id=chat_id,
+        text="🤖 <b>Smart Money Tracker Bot</b>\n\n"
         "✅ You're now subscribed to real-time alerts!\n\n"
         "I automatically scan for volume spikes and smart money activity on Solana.\n\n"
         "<b>Signal Tiers:</b>\n"
@@ -591,6 +614,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode='HTML'
     )
     
+    # Store this message to delete it next time
+    context.user_data['last_start_message'] = start_msg
+    
     print(f"✅ Chat {chat_id} subscribed to alerts")
 
 
@@ -598,21 +624,44 @@ async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Stop command - unsubscribes user from alerts"""
     chat_id = update.effective_chat.id
     
+    # Delete the user's /stop command
+    try:
+        await update.message.delete()
+    except:
+        pass
+    
+    # Delete previous stop message if exists
+    if 'last_stop_message' in context.user_data:
+        try:
+            await context.user_data['last_stop_message'].delete()
+        except:
+            pass
+    
     if 'active_chats' in context.bot_data:
         context.bot_data['active_chats'].discard(chat_id)
     
-    await update.message.reply_text(
-        "🛑 <b>Alerts Stopped</b>\n\n"
+    stop_msg = await context.bot.send_message(
+        chat_id=chat_id,
+        text="🛑 <b>Alerts Stopped</b>\n\n"
         "You've been unsubscribed from alerts.\n\n"
         "Use /start to subscribe again.",
         parse_mode='HTML'
     )
+    
+    # Store this message to delete it next time
+    context.user_data['last_stop_message'] = stop_msg
     
     print(f"❌ Chat {chat_id} unsubscribed from alerts")
 
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Stats command - shows ALL call performance from database"""
+    
+    # Delete the user's /stats command
+    try:
+        await update.message.delete()
+    except:
+        pass
     
     # Delete previous stats message if exists
     if 'last_stats_message' in context.user_data:
@@ -621,7 +670,11 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except:
             pass  # Message might already be deleted
     
-    loading_msg = await update.message.reply_text("📊 Loading call history from database...", parse_mode='HTML')
+    loading_msg = await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text="📊 Loading call history from database...",
+        parse_mode='HTML'
+    )
     
     all_calls = get_all_calls()
     
@@ -704,7 +757,11 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Delete loading message and send final stats
     await loading_msg.delete()
-    stats_msg = await update.message.reply_text(message, parse_mode='HTML')
+    stats_msg = await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text=message,
+        parse_mode='HTML'
+    )
     
     # Store this message to delete it next time
     context.user_data['last_stats_message'] = stats_msg
@@ -818,18 +875,34 @@ async def performance(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def export_db(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Export command - sends database file"""
+    
+    # Delete the user's /export command
+    try:
+        await update.message.delete()
+    except:
+        pass
+    
     try:
         if os.path.exists(DB_FILE):
-            await update.message.reply_document(
+            await context.bot.send_document(
+                chat_id=update.effective_chat.id,
                 document=open(DB_FILE, 'rb'),
                 filename='call_history.db',
                 caption='📊 <b>Call History Database</b>\n\nOpen with SQLite browser to view all data.',
                 parse_mode='HTML'
             )
         else:
-            await update.message.reply_text("❌ Database file not found.", parse_mode='HTML')
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text="❌ Database file not found.",
+                parse_mode='HTML'
+            )
     except Exception as e:
-        await update.message.reply_text(f"❌ Error: {e}", parse_mode='HTML')
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=f"❌ Error: {e}",
+            parse_mode='HTML'
+        )
 
 
 def main():
