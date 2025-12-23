@@ -28,6 +28,7 @@ def init_database():
             name TEXT NOT NULL,
             initial_price REAL NOT NULL,
             peak_price REAL NOT NULL,
+            min_price REAL NOT NULL,
             call_time TIMESTAMP NOT NULL,
             tier TEXT NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -74,9 +75,9 @@ def save_call(token_address, pair_address, symbol, name, initial_price, tier):
     cursor = conn.cursor()
     
     cursor.execute('''
-        INSERT INTO calls (token_address, pair_address, symbol, name, initial_price, peak_price, call_time, tier)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (token_address, pair_address, symbol, name, initial_price, initial_price, datetime.now(), tier))
+        INSERT INTO calls (token_address, pair_address, symbol, name, initial_price, peak_price, min_price, call_time, tier)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (token_address, pair_address, symbol, name, initial_price, initial_price, initial_price, datetime.now(), tier))
     
     conn.commit()
     conn.close()
@@ -100,13 +101,49 @@ def update_peak_price(pair_address, new_peak):
     return affected > 0
 
 
+def update_min_price(pair_address, new_min):
+    """Update minimum price if lower than current minimum"""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+        UPDATE calls 
+        SET min_price = ?
+        WHERE pair_address = ? AND min_price > ?
+    ''', (new_min, pair_address, new_min))
+    
+    conn.commit()
+    affected = cursor.rowcount
+    conn.close()
+    
+    return affected > 0
+
+
+def update_min_price(pair_address, new_min):
+    """Update min price if lower than current min"""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+        UPDATE calls 
+        SET min_price = ?
+        WHERE pair_address = ? AND min_price > ?
+    ''', (new_min, pair_address, new_min))
+    
+    conn.commit()
+    affected = cursor.rowcount
+    conn.close()
+    
+    return affected > 0
+
+
 def get_all_calls():
     """Get all calls from database"""
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     
     cursor.execute('''
-        SELECT token_address, pair_address, symbol, name, initial_price, peak_price, call_time, tier
+        SELECT token_address, pair_address, symbol, name, initial_price, peak_price, min_price, call_time, tier
         FROM calls
         ORDER BY call_time DESC
     ''')
@@ -123,20 +160,21 @@ def get_all_calls():
             'name': row[3],
             'initial_price': row[4],
             'peak_price': row[5],
-            'call_time': datetime.fromisoformat(row[6]) if isinstance(row[6], str) else row[6],
-            'tier': row[7],
+            'min_price': row[6],
+            'call_time': datetime.fromisoformat(row[7]) if isinstance(row[7], str) else row[7],
+            'tier': row[8],
         })
     
     return calls
 
 
 def get_recent_calls(limit=20):
-    """Get most recent calls for peak tracking"""
+    """Get most recent calls for peak/min tracking"""
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     
     cursor.execute('''
-        SELECT pair_address, symbol, peak_price
+        SELECT pair_address, symbol, peak_price, min_price
         FROM calls
         ORDER BY call_time DESC
         LIMIT ?
@@ -145,7 +183,7 @@ def get_recent_calls(limit=20):
     rows = cursor.fetchall()
     conn.close()
     
-    return [{'pair_address': r[0], 'symbol': r[1], 'peak_price': r[2]} for r in rows]
+    return [{'pair_address': r[0], 'symbol': r[1], 'peak_price': r[2], 'min_price': r[3]} for r in rows]
 
 class SmartMoneyTracker:
     """Tracks volume spikes and buying pressure on Solana tokens"""
@@ -287,7 +325,7 @@ class SmartMoneyTracker:
 
 
 async def update_peak_prices():
-    """Update peak prices for recent calls - runs every scan cycle"""
+    """Update peak and min prices for recent calls - runs every scan cycle"""
     recent_calls = get_recent_calls(limit=20)  # Only track last 20 for performance
     
     if not recent_calls:
@@ -313,11 +351,16 @@ async def update_peak_prices():
                                 if current_price > call.get('peak_price', 0):
                                     if update_peak_price(pair_address, current_price):
                                         print(f"  🚀 New peak for ${call['symbol']}: ${current_price:.10f}")
+                                
+                                # Update min if current is lower
+                                if current_price < call.get('min_price', float('inf')):
+                                    if update_min_price(pair_address, current_price):
+                                        print(f"  📉 New low for ${call['symbol']}: ${current_price:.10f}")
                     
                     await asyncio.sleep(0.1)  # Quick rate limiting
                     
                 except Exception as e:
-                    print(f"Error updating peak for {call.get('symbol')}: {e}")
+                    print(f"Error updating prices for {call.get('symbol')}: {e}")
     
     except Exception as e:
         print(f"Error in update_peak_prices: {e}")
@@ -693,10 +736,14 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for call in all_calls:
         initial_price = call.get('initial_price', 0)
         peak_price = call.get('peak_price', 0)
+        min_price = call.get('min_price', 0)
         
-        if peak_price > 0 and initial_price > 0:
+        if peak_price > 0 and initial_price > 0 and min_price > 0:
             # Calculate MAX % gain (using peak)
             max_gain_pct = ((peak_price - initial_price) / initial_price) * 100
+            
+            # Calculate MAX drawdown (worst drop from initial)
+            max_drawdown_pct = ((min_price - initial_price) / initial_price) * 100
             
             results.append({
                 'symbol': call['symbol'],
@@ -704,7 +751,9 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 'tier': call['tier'],
                 'initial_price': initial_price,
                 'peak_price': peak_price,
+                'min_price': min_price,
                 'max_gain_pct': max_gain_pct,
+                'max_drawdown_pct': max_drawdown_pct,
                 'call_time': call['call_time'],
             })
     
@@ -753,7 +802,13 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         emoji = "🟢" if result['max_gain_pct'] > 0 else "🔴"
         
         message += f"{i}. {emoji} <b>{result['symbol']}</b> - {result['tier']}\n"
-        message += f"   Max: <b>{result['max_gain_pct']:+.2f}%</b> | {time_str}\n\n"
+        message += f"   Peak: <b>{result['max_gain_pct']:+.2f}%</b>"
+        
+        # Show max drawdown if it was negative
+        if result['max_drawdown_pct'] < 0:
+            message += f" | Low: <b>{result['max_drawdown_pct']:.2f}%</b>"
+        
+        message += f" | {time_str}\n\n"
     
     # Delete loading message and send final stats
     await loading_msg.delete()
