@@ -364,8 +364,10 @@ async def update_peak_prices():
                                     if update_peak_price(pair_address, current_price):
                                         print(f"  🚀 New peak for ${call['symbol']}: ${current_price:.10f}")
                                 
-                                # Update min if current is lower
-                                if current_price < call.get('min_price', float('inf')):
+                                # Only update min for NEW calls (where min_price was set to initial_price)
+                                # This prevents tracking lows for old calls from before migration
+                                min_price = call.get('min_price', float('inf'))
+                                if min_price > 0 and current_price < min_price:
                                     if update_min_price(pair_address, current_price):
                                         print(f"  📉 New low for ${call['symbol']}: ${current_price:.10f}")
                     
@@ -972,6 +974,152 @@ async def export_db(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
+async def setlow(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Set low price for a past call manually
+    Usage: /setlow <symbol> <low_price> [call_number]
+    Example: /setlow BANANA 0.00005
+    Example: /setlow BANANA 0.00005 2  (for 2nd call)
+    """
+    
+    # Delete the user's command
+    try:
+        await update.message.delete()
+    except:
+        pass
+    
+    # Parse arguments
+    if len(context.args) < 2 or len(context.args) > 3:
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="❌ <b>Usage:</b> /setlow SYMBOL LOW_PRICE [CALL_NUMBER]\n\n"
+                 "Examples:\n"
+                 "<code>/setlow BANANA 0.00005</code> (most recent)\n"
+                 "<code>/setlow BANANA 0.00005 2</code> (2nd most recent)",
+            parse_mode='HTML'
+        )
+        return
+    
+    symbol = context.args[0].upper()
+    
+    try:
+        low_price = float(context.args[1])
+    except ValueError:
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="❌ Invalid price. Use a number like: <code>0.00005</code>",
+            parse_mode='HTML'
+        )
+        return
+    
+    # Which call (1 = most recent, 2 = 2nd most recent, etc.)
+    call_number = 1
+    if len(context.args) == 3:
+        try:
+            call_number = int(context.args[2])
+            if call_number < 1:
+                raise ValueError()
+        except ValueError:
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text="❌ Call number must be a positive integer (1, 2, 3...)",
+                parse_mode='HTML'
+            )
+            return
+    
+    # Find all calls for this symbol
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+        SELECT pair_address, initial_price, min_price, call_time, tier
+        FROM calls
+        WHERE UPPER(symbol) = ?
+        ORDER BY call_time DESC
+    ''', (symbol,))
+    
+    results = cursor.fetchall()
+    
+    if not results:
+        conn.close()
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=f"❌ No calls found for ${symbol}",
+            parse_mode='HTML'
+        )
+        return
+    
+    # Check if call_number exists
+    if call_number > len(results):
+        conn.close()
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=f"❌ Only {len(results)} call(s) found for ${symbol}. You requested call #{call_number}.",
+            parse_mode='HTML'
+        )
+        return
+    
+    # Get the specific call (call_number-1 because list is 0-indexed)
+    selected_call = results[call_number - 1]
+    pair_address, initial_price, current_min, call_time, tier = selected_call
+    
+    # Update min_price for this specific pair
+    cursor.execute('''
+        UPDATE calls
+        SET min_price = ?
+        WHERE pair_address = ?
+    ''', (low_price, pair_address))
+    
+    conn.commit()
+    conn.close()
+    
+    # Calculate drawdown
+    drawdown_pct = ((low_price - initial_price) / initial_price) * 100
+    
+    # Format call time
+    if isinstance(call_time, str):
+        call_time = datetime.fromisoformat(call_time)
+    
+    elapsed = datetime.now() - call_time
+    hours = elapsed.total_seconds() / 3600
+    if hours < 24:
+        time_str = f"{hours:.1f}h ago"
+    else:
+        days = hours / 24
+        time_str = f"{days:.1f}d ago"
+    
+    # Build response
+    message = f"✅ <b>Low Updated</b>\n\n"
+    message += f"Token: ${symbol}\n"
+    message += f"Call: #{call_number} of {len(results)} ({time_str}, {tier})\n\n"
+    message += f"Initial: ${initial_price:.10f}\n"
+    message += f"Old Low: ${current_min:.10f}\n"
+    message += f"New Low: ${low_price:.10f}\n"
+    message += f"Drawdown: <b>{drawdown_pct:.2f}%</b>"
+    
+    # If multiple calls exist, show them
+    if len(results) > 1:
+        message += f"\n\n<b>All ${symbol} calls:</b>\n"
+        for i, call in enumerate(results, 1):
+            _, init, _, ct, t = call
+            if isinstance(ct, str):
+                ct = datetime.fromisoformat(ct)
+            elapsed = datetime.now() - ct
+            hours = elapsed.total_seconds() / 3600
+            if hours < 24:
+                ts = f"{hours:.1f}h"
+            else:
+                ts = f"{hours/24:.1f}d"
+            
+            marker = "👉" if i == call_number else "  "
+            message += f"{marker} #{i}: {t}, {ts} ago\n"
+    
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text=message,
+        parse_mode='HTML'
+    )
+
+
 def main():
     """Main function"""
     # Initialize database
@@ -993,6 +1141,7 @@ def main():
     application.add_handler(CommandHandler("stop", stop))
     application.add_handler(CommandHandler("stats", stats))
     application.add_handler(CommandHandler("export", export_db))
+    application.add_handler(CommandHandler("setlow", setlow))
     application.add_handler(CommandHandler("performance", performance))
     application.add_handler(CommandHandler("stats", performance))  # Alias
     
