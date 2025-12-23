@@ -19,6 +19,7 @@ def init_database():
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     
+    # Create table if it doesn't exist
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS calls (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -28,12 +29,23 @@ def init_database():
             name TEXT NOT NULL,
             initial_price REAL NOT NULL,
             peak_price REAL NOT NULL,
-            min_price REAL NOT NULL,
             call_time TIMESTAMP NOT NULL,
             tier TEXT NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
+    
+    # ALWAYS check if min_price column exists and add it if missing
+    cursor.execute("PRAGMA table_info(calls)")
+    columns = [column[1] for column in cursor.fetchall()]
+    
+    if 'min_price' not in columns:
+        print("⚙️ Migrating database: Adding min_price column...")
+        cursor.execute("ALTER TABLE calls ADD COLUMN min_price REAL")
+        # Set min_price to initial_price for existing records
+        cursor.execute("UPDATE calls SET min_price = initial_price WHERE min_price IS NULL")
+        conn.commit()
+        print("✅ Migration complete!")
     
     # Create index for faster lookups
     cursor.execute('''
