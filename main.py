@@ -14,6 +14,9 @@ DEXSCREENER_API = "https://api.dexscreener.com/latest/dex/search?q="
 DATA_DIR = '/data' if os.path.exists('/data') else '.'
 DB_FILE = os.path.join(DATA_DIR, 'call_history.db')
 
+# Duplicate prevention: Don't call same token within this many hours
+DUPLICATE_COOLDOWN_HOURS = 12
+
 def init_database():
     """Initialize SQLite database for persistent call tracking"""
     conn = sqlite3.connect(DB_FILE)
@@ -491,12 +494,26 @@ async def scan_for_signals(context: ContextTypes.DEFAULT_TYPE):
         
         print(f"\n📊 Scan complete: Checked {tokens_checked} tokens, found {len(all_signals)} valid signals")
         
+        # Filter out tokens called in last X hours (configurable)
+        filtered_signals = []
+        for signal in all_signals:
+            pair_address = signal['pair'].get('pairAddress')
+            symbol = signal['pair'].get('baseToken', {}).get('symbol')
+            
+            if was_recently_called(pair_address, hours=DUPLICATE_COOLDOWN_HOURS):
+                print(f"  ⏭️ Filtering out ${symbol} - already called in last {DUPLICATE_COOLDOWN_HOURS}h")
+                continue
+            
+            filtered_signals.append(signal)
+        
+        print(f"📊 After filtering duplicates: {len(filtered_signals)} unique signals")
+        
         # Sort by priority (tier) then by volume
-        all_signals.sort(key=lambda x: (x['priority'], x['volume']), reverse=True)
+        filtered_signals.sort(key=lambda x: (x['priority'], x['volume']), reverse=True)
         
         # Send ONLY the best signal (if any)
-        if all_signals:
-            best_signal = all_signals[0]
+        if filtered_signals:
+            best_signal = filtered_signals[0]
             pair = best_signal['pair']
             tier = best_signal['tier']
             metrics = best_signal['metrics']
@@ -505,11 +522,6 @@ async def scan_for_signals(context: ContextTypes.DEFAULT_TYPE):
             
             # Mark as alerted
             SmartMoneyTracker.alerted_tokens.add(pair_address)
-            
-            # Optional: Skip if token was called in last 24h (uncomment to enable)
-            # if was_recently_called(pair_address, hours=24):
-            #     print(f"⏭️ Skipping ${symbol} - already called in last 24h")
-            #     continue
             
             # Save call to database
             symbol = best_signal['pair'].get('baseToken', {}).get('symbol')
