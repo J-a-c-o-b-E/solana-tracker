@@ -67,16 +67,34 @@ def init_database():
         print("   To fix: Add persistent disk mounted at /data on Render")
 
 
-def was_recently_called(pair_address, hours=24):
-    """Check if token was called in last X hours"""
+def was_recently_called(token_address, hours=24):
+    """Check if token was called in last X hours (by token address, not pair)"""
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     
     cursor.execute('''
         SELECT COUNT(*) FROM calls
-        WHERE pair_address = ? 
+        WHERE token_address = ? 
         AND datetime(call_time) > datetime('now', '-' || ? || ' hours')
-    ''', (pair_address, hours))
+    ''', (token_address, hours))
+    
+    count = cursor.fetchone()[0]
+    conn.close()
+    
+    return count > 0
+
+
+def had_first_call_already(token_address, hours=24):
+    """Check if token already had a FIRST_CALL in last X hours"""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+        SELECT COUNT(*) FROM calls
+        WHERE token_address = ? 
+        AND tier = 'FIRST_CALL'
+        AND datetime(call_time) > datetime('now', '-' || ? || ' hours')
+    ''', (token_address, hours))
     
     count = cursor.fetchone()[0]
     conn.close()
@@ -118,24 +136,6 @@ def update_peak_price(pair_address, new_peak):
 
 def update_min_price(pair_address, new_min):
     """Update minimum price if lower than current minimum"""
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    
-    cursor.execute('''
-        UPDATE calls 
-        SET min_price = ?
-        WHERE pair_address = ? AND min_price > ?
-    ''', (new_min, pair_address, new_min))
-    
-    conn.commit()
-    affected = cursor.rowcount
-    conn.close()
-    
-    return affected > 0
-
-
-def update_min_price(pair_address, new_min):
-    """Update min price if lower than current min"""
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     
@@ -494,15 +494,23 @@ async def scan_for_signals(context: ContextTypes.DEFAULT_TYPE):
         
         print(f"\n📊 Scan complete: Checked {tokens_checked} tokens, found {len(all_signals)} valid signals")
         
-        # Filter out tokens called in last X hours (configurable)
+        # Filter out duplicate calls intelligently:
+        # - Block FIRST_CALL if token already had a FIRST_CALL
+        # - Allow higher tiers (MEDIUM/STRONG/VERY_STRONG) even if token was called before
         filtered_signals = []
         for signal in all_signals:
-            pair_address = signal['pair'].get('pairAddress')
+            token_address = signal['pair'].get('baseToken', {}).get('address')
             symbol = signal['pair'].get('baseToken', {}).get('symbol')
+            tier = signal['tier']
             
-            if was_recently_called(pair_address, hours=DUPLICATE_COOLDOWN_HOURS):
-                print(f"  ⏭️ Filtering out ${symbol} - already called in last {DUPLICATE_COOLDOWN_HOURS}h")
-                continue
+            # If this is a FIRST_CALL, check if token already had one
+            if tier == 'FIRST_CALL':
+                if had_first_call_already(token_address, hours=DUPLICATE_COOLDOWN_HOURS):
+                    print(f"  ⏭️ Filtering out ${symbol} (FIRST_CALL) - already had FIRST_CALL in last {DUPLICATE_COOLDOWN_HOURS}h")
+                    continue
+            
+            # For higher tiers (MEDIUM/STRONG/VERY_STRONG), always allow regardless of previous calls
+            # This lets us call a token again if it reaches a stronger tier
             
             filtered_signals.append(signal)
         
@@ -848,112 +856,6 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['last_stats_message'] = stats_msg
 
 
-async def performance(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Check performance of all calls made"""
-    await update.message.reply_text(
-        "📊 Analyzing call performance...\n"
-        "Fetching current prices from Dexscreener...",
-        parse_mode='HTML'
-    )
-    
-    if not SmartMoneyTracker.call_history:
-        await update.message.reply_text(
-            "❌ No calls have been made yet!\n\n"
-            "Start the bot with /start to receive signals.",
-            parse_mode='HTML'
-        )
-        return
-    
-    # Fetch current prices for all tracked calls
-    results = []
-    
-    async with aiohttp.ClientSession() as session:
-        for call in SmartMoneyTracker.call_history:
-            try:
-                token_address = call['token_address']
-                
-                # Fetch current data from Dexscreener
-                url = f"https://api.dexscreener.com/latest/dex/tokens/{token_address}"
-                async with session.get(url) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        pairs = data.get('pairs', [])
-                        
-                        if pairs:
-                            # Get Solana pair
-                            solana_pair = next((p for p in pairs if p.get('chainId') == 'solana'), None)
-                            
-                            if solana_pair:
-                                current_price = float(solana_pair.get('priceUsd', 0))
-                                initial_price = call['initial_price']
-                                
-                                if initial_price > 0:
-                                    price_change = ((current_price - initial_price) / initial_price) * 100
-                                    
-                                    # Calculate time since call
-                                    time_diff = datetime.now() - call['call_time']
-                                    hours = time_diff.total_seconds() / 3600
-                                    
-                                    results.append({
-                                        'symbol': call['symbol'],
-                                        'name': call['name'],
-                                        'tier': call['tier'],
-                                        'price_change': price_change,
-                                        'hours_ago': hours,
-                                        'initial_price': initial_price,
-                                        'current_price': current_price,
-                                    })
-                
-                await asyncio.sleep(0.3)  # Rate limiting
-            
-            except Exception as e:
-                print(f"Error fetching price for {call['symbol']}: {e}")
-    
-    if not results:
-        await update.message.reply_text(
-            "❌ Could not fetch current prices for tracked calls.",
-            parse_mode='HTML'
-        )
-        return
-    
-    # Sort by price change (best to worst)
-    results.sort(key=lambda x: x['price_change'], reverse=True)
-    
-    # Calculate statistics
-    total_calls = len(results)
-    profitable_calls = len([r for r in results if r['price_change'] > 0])
-    avg_gain = sum(r['price_change'] for r in results) / total_calls
-    max_gain = max(r['price_change'] for r in results)
-    max_loss = min(r['price_change'] for r in results)
-    
-    # Build message
-    message = "<b>📊 CALL PERFORMANCE REPORT</b>\n\n"
-    message += f"<b>Statistics:</b>\n"
-    message += f"Total Calls: <b>{total_calls}</b>\n"
-    message += f"Profitable: <b>{profitable_calls}/{total_calls}</b> ({(profitable_calls/total_calls*100):.1f}%)\n"
-    message += f"Avg Change: <b>{avg_gain:+.2f}%</b>\n"
-    message += f"Best: <b>{max_gain:+.2f}%</b>\n"
-    message += f"Worst: <b>{max_loss:+.2f}%</b>\n\n"
-    
-    message += "<b>Recent Calls:</b>\n"
-    
-    # Show top 10 calls
-    for i, result in enumerate(results[:10], 1):
-        emoji = "🟢" if result['price_change'] > 0 else "🔴"
-        message += f"\n{i}. {emoji} <b>{result['symbol']}</b>\n"
-        message += f"   {result['tier']}\n"
-        message += f"   Change: <b>{result['price_change']:+.2f}%</b>\n"
-        message += f"   Called: {result['hours_ago']:.1f}h ago\n"
-        message += f"   ${result['initial_price']:.8f} → ${result['current_price']:.8f}\n"
-    
-    if len(results) > 10:
-        message += f"\n<i>... and {len(results) - 10} more calls</i>"
-    
-    await update.message.reply_text(message, parse_mode='HTML')
-    
-    print(f"📊 Performance report sent to user")
-
-
 async def export_db(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Export command - sends database file"""
     
@@ -1154,8 +1056,6 @@ def main():
     application.add_handler(CommandHandler("stats", stats))
     application.add_handler(CommandHandler("export", export_db))
     application.add_handler(CommandHandler("setlow", setlow))
-    application.add_handler(CommandHandler("performance", performance))
-    application.add_handler(CommandHandler("stats", performance))  # Alias
     
     # Add scanning job (every 15 seconds)
     job_queue = application.job_queue
