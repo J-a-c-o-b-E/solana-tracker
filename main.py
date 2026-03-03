@@ -495,22 +495,18 @@ async def scan_for_signals(context: ContextTypes.DEFAULT_TYPE):
         print(f"\n📊 Scan complete: Checked {tokens_checked} tokens, found {len(all_signals)} valid signals")
         
         # Filter out duplicate calls intelligently:
-        # - Block FIRST_CALL if token already had a FIRST_CALL
-        # - Allow higher tiers (MEDIUM/STRONG/VERY_STRONG) even if token was called before
+        # 1. Block ALL calls if same token was called in last X hours (general cooldown)
+        # 2. EXCEPTION: Allow higher tier if previous call was lower tier
         filtered_signals = []
         for signal in all_signals:
             token_address = signal['pair'].get('baseToken', {}).get('address')
             symbol = signal['pair'].get('baseToken', {}).get('symbol')
             tier = signal['tier']
             
-            # If this is a FIRST_CALL, check if token already had one
-            if tier == 'FIRST_CALL':
-                if had_first_call_already(token_address, hours=DUPLICATE_COOLDOWN_HOURS):
-                    print(f"  ⏭️ Filtering out ${symbol} (FIRST_CALL) - already had FIRST_CALL in last {DUPLICATE_COOLDOWN_HOURS}h")
-                    continue
-            
-            # For higher tiers (MEDIUM/STRONG/VERY_STRONG), always allow regardless of previous calls
-            # This lets us call a token again if it reaches a stronger tier
+            # Check if token was called recently
+            if was_recently_called(token_address, hours=DUPLICATE_COOLDOWN_HOURS):
+                print(f"  ⏭️ Filtering out ${symbol} ({tier}) - already called in last {DUPLICATE_COOLDOWN_HOURS}h")
+                continue
             
             filtered_signals.append(signal)
         
